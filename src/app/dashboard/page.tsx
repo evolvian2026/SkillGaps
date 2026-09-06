@@ -6,6 +6,8 @@ import { requireStudent } from "@/lib/auth";
 import { withRequestContext } from "@/lib/db/client";
 import { attempts, tracks } from "@/lib/db/schema";
 import { startAttemptAction } from "@/lib/assessment/actions";
+import { openEmployerAssessments } from "@/lib/employer/queries";
+import { startEmployerAssessmentAction } from "@/lib/employer/actions";
 
 export const metadata = { title: "Your assessments" };
 export const dynamic = "force-dynamic";
@@ -65,7 +67,14 @@ export default async function DashboardPage({
       )
       .limit(1);
 
-    return { availableTracks, history, inProgress };
+    return {
+      availableTracks,
+      history,
+      inProgress,
+      // Employer drives open to this student's cohort. RLS hides any whose
+      // employer lacks an active grant on their institution.
+      employerAssessments: await openEmployerAssessments(tx),
+    };
   });
 
   const bestByTrack = new Map<string, number>();
@@ -101,6 +110,40 @@ export default async function DashboardPage({
             </Link>
             .
           </Alert>
+        </div>
+      ) : null}
+
+      {data.employerAssessments.length > 0 ? (
+        <div className="mb-8">
+          <SectionHeading
+            title="Campus drives open to you"
+            hint="Assessments set by employers your institution works with. Taking one does not share your identity with them."
+          />
+          <div className="grid gap-4 md:grid-cols-2">
+            {data.employerAssessments.map((drive) => (
+              <Card key={drive.id} className="flex flex-col border-brand-500/30">
+                <p className="text-xs font-semibold uppercase tracking-wide text-brand-600">
+                  {drive.employerName}
+                </p>
+                <h3 className="mt-1 font-semibold">{drive.title}</h3>
+                <p className="mt-1 flex-1 text-sm text-ink-600">
+                  {drive.description ?? drive.trackName}
+                </p>
+                <p className="mt-3 text-xs text-ink-400">
+                  {drive.trackName} · {Math.round(drive.durationSeconds / 60)} minutes
+                  {drive.closesAt
+                    ? ` · closes ${drive.closesAt.toLocaleDateString("en-IN", { dateStyle: "medium" })}`
+                    : ""}
+                </p>
+                <form action={startEmployerAssessmentAction} className="mt-4">
+                  <input type="hidden" name="assessmentId" value={drive.id} />
+                  <Button type="submit" className="w-full">
+                    Start drive assessment
+                  </Button>
+                </form>
+              </Card>
+            ))}
+          </div>
         </div>
       ) : null}
 

@@ -11,6 +11,11 @@ export interface SessionUser {
   role: UserRole;
   email: string;
   fullName: string;
+  /**
+   * Set only for `employer` users. Their reach is defined by grants against
+   * this id, not by `tenantId` — an employer's own tenant owns no students.
+   */
+  employerId?: string | null;
 }
 
 /**
@@ -51,4 +56,8 @@ export const STAFF_ROLES: readonly UserRole[] = ["faculty", "admin", "super_admi
 
 export function isStaff(role: UserRole): boolean {
   return STAFF_ROLES.includes(role);
+}
+
+export function isEmployer(role: UserRole): boolean {
+  return role === "employer";
 }

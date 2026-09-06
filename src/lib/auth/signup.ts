@@ -74,6 +74,7 @@ export async function registerStudent(input: SignupInput): Promise<SessionUser> 
     role: "student" as UserRole,
     email,
     fullName: input.fullName.trim(),
+    employerId: null,
   };
 
   // Recorded as an event, in the new user's own context, so the consent row is
@@ -103,6 +104,74 @@ const DUMMY_HASH =
   "scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA$" +
   "Ea3JmJ3xGxhZC1PZQ1kUxJXkCQ0iZ8bqLpVvE5oR4Jt0Wv8xQKz9nS7mYc2bH1dGfN3sT6uP0aXwL4kM8vB2Ag";
 
+export interface EmployerSignupInput {
+  email: string;
+  password: string;
+  fullName: string;
+}
+
+/**
+ * Registers an employer user.
+ *
+ * The organisation is resolved from the email domain, so an employer account
+ * can only be created against an organisation the platform has already set up
+ * — there is no self-serve path to inventing one. The role is fixed inside
+ * `app.create_employer_user`, so this form cannot mint any other kind of
+ * account.
+ */
+export async function registerEmployerUser(
+  input: EmployerSignupInput,
+): Promise<SessionUser> {
+  const email = input.email.trim().toLowerCase();
+
+  const lookup = await rawDb().execute(
+    sql`SELECT * FROM app.resolve_employer_by_domain(${emailDomain(email)})`,
+  );
+  const org = (lookup.rows as Record<string, unknown>[])[0];
+  if (!org) {
+    throw new AuthError(
+      "We could not match that email address to a registered employer. Contact your SkillGaps administrator to have your organisation added.",
+      "unknown_tenant",
+    );
+  }
+
+  const weak = assertPasswordStrength(input.password);
+  if (weak) throw new AuthError(weak, "weak_password");
+
+  const passwordHash = await hashPassword(input.password);
+
+  let userId: string;
+  try {
+    const result = await rawDb().execute(
+      sql`SELECT app.create_employer_user(
+            ${org.employer_id as string}::uuid, ${email},
+            ${input.fullName.trim()}, ${passwordHash}
+          ) AS id`,
+    );
+    userId = (result.rows as Record<string, unknown>[])[0].id as string;
+  } catch (err) {
+    if (err instanceof Error && /users_email_key/.test(err.message)) {
+      throw new AuthError("An account already exists for this email.", "email_taken");
+    }
+    throw err;
+  }
+
+  const tenantLookup = await rawDb().execute(
+    sql`SELECT tenant_id FROM public.users WHERE id = ${userId}::uuid`,
+  );
+  const tenantId = (tenantLookup.rows as Record<string, unknown>[])[0]
+    .tenant_id as string;
+
+  return {
+    userId,
+    tenantId,
+    role: "employer" as UserRole,
+    email,
+    fullName: input.fullName.trim(),
+    employerId: org.employer_id as string,
+  };
+}
+
 export async function authenticate(
   email: string,
   password: string,
@@ -131,5 +200,6 @@ export async function authenticate(
     role: row.user_role as UserRole,
     email: email.trim().toLowerCase(),
     fullName: row.full_name as string,
+    employerId: (row.employer_id as string | null) ?? null,
   };
 }

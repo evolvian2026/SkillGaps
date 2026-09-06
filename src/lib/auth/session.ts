@@ -57,5 +57,6 @@ export async function readSession(): Promise<SessionUser | null> {
     role: row.user_role as UserRole,
     email: row.email as string,
     fullName: row.full_name as string,
+    employerId: (row.employer_id as string | null) ?? null,
   };
 }

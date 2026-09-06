@@ -53,6 +53,53 @@ export function LoginForm({ action }: { action: Action }) {
   );
 }
 
+export function EmployerSignupForm({ action }: { action: Action }) {
+  const [state, formAction] = useActionState(action, {});
+  return (
+    <form action={formAction} className="space-y-4">
+      {state.error ? <Alert>{state.error}</Alert> : null}
+      <Field label="Your name">
+        <input
+          name="fullName"
+          required
+          autoComplete="name"
+          defaultValue={state.values?.fullName}
+          className={inputClass}
+        />
+      </Field>
+      <Field
+        label="Work email"
+        hint="Must be on your organisation's registered domain."
+      >
+        <input
+          name="email"
+          type="email"
+          required
+          autoComplete="email"
+          defaultValue={state.values?.email}
+          className={inputClass}
+        />
+      </Field>
+      <Field label="Password" hint="At least 10 characters, with a letter and a number.">
+        <input
+          name="password"
+          type="password"
+          required
+          autoComplete="new-password"
+          className={inputClass}
+        />
+      </Field>
+      <Submit label="Create employer account" />
+      <p className="text-center text-sm text-ink-600">
+        Already have an account?{" "}
+        <Link href="/login" className="font-medium text-brand-600 hover:underline">
+          Sign in
+        </Link>
+      </p>
+    </form>
+  );
+}
+
 export function SignupForm({ action }: { action: Action }) {
   const [state, formAction] = useActionState(action, {});
   return (

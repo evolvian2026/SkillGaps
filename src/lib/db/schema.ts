@@ -102,6 +102,13 @@ export const users = pgTable(
     passwordHash: text("password_hash"),
     /** Supabase `auth.users.id`, when that provider is in use. */
     externalAuthId: text("external_auth_id"),
+    /**
+     * Phase 3. Set only for `employer` users, linking them to the organisation
+     * whose grants define their reach. Null for students and university staff.
+     * Declared here rather than in a separate table so that one identity model
+     * still covers every role.
+     */
+    employerId: uuid("employer_id"),
     isActive: boolean("is_active").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -1084,4 +1091,303 @@ export const placementOutcomes = pgTable(
     uniqueIndex("placement_outcomes_user_key").on(t.userId),
     index("placement_outcomes_tenant_idx").on(t.tenantId, t.status),
   ],
+);
+
+/* ==========================================================================
+ * PHASE 3
+ *
+ * Employers are a new tenant *type*, not a new permission system: they reuse
+ * `users.role = 'employer'` and the same RLS helpers. What changes is that an
+ * employer's reach is defined by explicit grants rather than by their own
+ * tenant, because an employer legitimately needs to see across universities —
+ * but only the ones that have admitted them.
+ * ========================================================================== */
+
+export const employerAccessStatusEnum = pgEnum("employer_access_status", [
+  "pending",
+  "active",
+  "revoked",
+]);
+
+export const profileShareScopeEnum = pgEnum("profile_share_scope", [
+  "aggregate_only",
+  "full_profile",
+]);
+
+export const calibrationStatusEnum = pgEnum("calibration_status", [
+  "queued",
+  "running",
+  "insufficient_data",
+  "succeeded",
+  "failed",
+]);
+
+/* --------------------------------------------------------------------------
+ * Employer organisations
+ * ------------------------------------------------------------------------ */
+
+/**
+ * An employer organisation.
+ *
+ * Deliberately a separate table from `tenants`: a university tenant owns
+ * students and their data, whereas an employer owns none and only ever holds
+ * granted, consented views. Conflating them would make it far too easy to
+ * write a policy that accidentally treats an employer like a data owner.
+ */
+export const employers = pgTable(
+  "employers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    slug: text("slug").notNull(),
+    /** Signups from these domains join this employer. */
+    emailDomains: text("email_domains").array().notNull().default([]),
+    website: text("website"),
+    /**
+     * The employer's own `tenants` row.
+     *
+     * Employer users still need a tenant to satisfy the identity model, and
+     * giving them one that owns no students means every existing
+     * student-scoped policy already returns nothing for them — no
+     * special-casing, and no chance of a policy that forgot employers exist.
+     */
+    tenantId: uuid("tenant_id").references(() => tenants.id, {
+      onDelete: "set null",
+    }),
+    isActive: boolean("is_active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("employers_slug_key").on(t.slug),
+    uniqueIndex("employers_tenant_key").on(t.tenantId),
+  ],
+);
+
+/**
+ * Which universities an employer may see, and at what granularity.
+ *
+ * Granted by the university, never self-serve. Without an `active` row here an
+ * employer can see nothing at all about a tenant — this table is the whole of
+ * their reach.
+ */
+export const employerAccessGrants = pgTable(
+  "employer_access_grants",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    employerId: uuid("employer_id")
+      .notNull()
+      .references(() => employers.id, { onDelete: "cascade" }),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    status: employerAccessStatusEnum("status").notNull().default("pending"),
+    /** Optional narrowing to a cohort within the university. */
+    batchYear: integer("batch_year"),
+    branch: text("branch"),
+    /** Who at the university granted it, and when. */
+    grantedBy: uuid("granted_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    grantedAt: timestamp("granted_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    note: text("note"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("employer_grants_unique").on(t.employerId, t.tenantId),
+    index("employer_grants_employer_idx").on(t.employerId, t.status),
+    index("employer_grants_tenant_idx").on(t.tenantId, t.status),
+  ],
+);
+
+/**
+ * A student's decision to share their profile with a specific employer.
+ *
+ * An auditable event, not a boolean on a row: who, what scope, when, and what
+ * they were shown. Withdrawal is a new row with `granted = false`, so the
+ * history of a share can always be reconstructed.
+ */
+export const profileShareConsents = pgTable(
+  "profile_share_consents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    employerId: uuid("employer_id")
+      .notNull()
+      .references(() => employers.id, { onDelete: "cascade" }),
+    scope: profileShareScopeEnum("scope").notNull().default("full_profile"),
+    granted: boolean("granted").notNull(),
+    /** Verbatim text the student agreed to, as with signup consent. */
+    noticeText: text("notice_text").notNull(),
+    recordedAt: timestamp("recorded_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("profile_share_user_idx").on(t.userId, t.employerId, t.recordedAt),
+    index("profile_share_employer_idx").on(t.employerId, t.granted),
+  ],
+);
+
+/* --------------------------------------------------------------------------
+ * Employer-created assessments
+ *
+ * Reuses the Phase 1 question bank and blueprint machinery rather than a
+ * parallel one: an employer drive is a `track`-shaped selection over the same
+ * `questions`, scoped to the cohorts they have been granted.
+ * ------------------------------------------------------------------------ */
+
+export const employerAssessments = pgTable(
+  "employer_assessments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    employerId: uuid("employer_id")
+      .notNull()
+      .references(() => employers.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    /** The track whose question bank and blueprint this draws from. */
+    trackId: uuid("track_id")
+      .notNull()
+      .references(() => tracks.id, { onDelete: "restrict" }),
+    description: text("description"),
+    durationSeconds: integer("duration_seconds").notNull().default(2700),
+    /** Which granted cohorts may take it. Empty means every granted tenant. */
+    tenantIds: uuid("tenant_ids").array().notNull().default([]),
+    opensAt: timestamp("opens_at", { withTimezone: true }),
+    closesAt: timestamp("closes_at", { withTimezone: true }),
+    isActive: boolean("is_active").notNull().default(false),
+    createdBy: uuid("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index("employer_assessments_employer_idx").on(t.employerId, t.isActive)],
+);
+
+/**
+ * Links an employer assessment to the diagnostic attempt a student made for
+ * it, so results flow through exactly the same scoring path as any other
+ * attempt rather than a second, less-tested one.
+ */
+export const employerAssessmentAttempts = pgTable(
+  "employer_assessment_attempts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    assessmentId: uuid("assessment_id")
+      .notNull()
+      .references(() => employerAssessments.id, { onDelete: "cascade" }),
+    attemptId: uuid("attempt_id")
+      .notNull()
+      .references(() => attempts.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("employer_attempt_unique").on(t.assessmentId, t.attemptId),
+    index("employer_attempt_assessment_idx").on(t.assessmentId),
+  ],
+);
+
+/* --------------------------------------------------------------------------
+ * Verified skill profiles
+ * ------------------------------------------------------------------------ */
+
+/**
+ * A shareable, verifiable snapshot of a student's record.
+ *
+ * The token is a random secret held only by the student and whoever they give
+ * it to; the database stores its SHA-256, so a leaked dump cannot be replayed
+ * as a working link. The snapshot itself is frozen at issue time — a verifier
+ * checking a link months later sees what was actually claimed, not a moving
+ * target — and the student can revoke it at any moment.
+ */
+export const verifiedProfiles = pgTable(
+  "verified_profiles",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** Public, non-secret id shown in the UI and quoted in support requests. */
+    publicId: text("public_id").notNull(),
+    /** SHA-256 of the shareable token. The token itself is never stored. */
+    tokenHash: text("token_hash").notNull(),
+    /** Frozen snapshot of what was verified, rendered on the public page. */
+    snapshot: jsonb("snapshot").notNull(),
+    label: text("label"),
+    issuedAt: timestamp("issued_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    /** Incremented on each successful verification, for the student's view. */
+    viewCount: integer("view_count").notNull().default(0),
+    lastViewedAt: timestamp("last_viewed_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("verified_profiles_public_id_key").on(t.publicId),
+    uniqueIndex("verified_profiles_token_hash_key").on(t.tokenHash),
+    index("verified_profiles_user_idx").on(t.userId, t.issuedAt),
+  ],
+);
+
+/* --------------------------------------------------------------------------
+ * Outcome-driven calibration
+ * ------------------------------------------------------------------------ */
+
+/**
+ * One run of the calibration analysis.
+ *
+ * Recorded whatever the result, including `insufficient_data` — a run that
+ * declined to produce thresholds is exactly the evidence needed to explain why
+ * the benchmarks are still provisional.
+ */
+export const calibrationRuns = pgTable(
+  "calibration_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    trackId: uuid("track_id")
+      .notNull()
+      .references(() => tracks.id, { onDelete: "cascade" }),
+    status: calibrationStatusEnum("status").notNull().default("queued"),
+    /** How many students with both a score and a recorded outcome were used. */
+    sampleSize: integer("sample_size").notNull().default(0),
+    placedCount: integer("placed_count").notNull().default(0),
+    /** Point-biserial correlation between score and placement. */
+    correlation: numeric("correlation", { precision: 6, scale: 4 }),
+    /** Per-skill-area analysis, thresholds and diagnostics. */
+    result: jsonb("result"),
+    /** The benchmark set this run produced, when it produced one. */
+    benchmarkSetId: uuid("benchmark_set_id").references(() => benchmarkSets.id, {
+      onDelete: "set null",
+    }),
+    message: text("message"),
+    startedAt: timestamp("started_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (t) => [index("calibration_runs_track_idx").on(t.trackId, t.startedAt)],
 );

@@ -25,6 +25,7 @@ export async function withJobContext<T>(
     userId: row.user_id as string,
     tenantId: row.tenant_id as string,
     role: row.user_role as string,
+    employerId: (row.employer_id as string | null) ?? null,
   };
   return withRequestContext(ctx, (tx) => fn(tx, ctx));
 }

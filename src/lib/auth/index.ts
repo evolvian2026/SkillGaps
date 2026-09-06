@@ -43,3 +43,19 @@ export async function requireStaff(): Promise<SessionUser> {
   if (!isStaff(user.role)) redirect("/dashboard");
   return user;
 }
+
+/**
+ * Employer portal.
+ *
+ * Requires both the role and a resolved organisation: an employer user with no
+ * `employerId` has no grants to key on, so every policy would deny them
+ * anyway. Failing here makes that an explicit, debuggable state rather than a
+ * confusing empty portal.
+ */
+export async function requireEmployer(): Promise<
+  SessionUser & { employerId: string }
+> {
+  const user = await requireUser();
+  if (user.role !== "employer" || !user.employerId) redirect("/login");
+  return user as SessionUser & { employerId: string };
+}

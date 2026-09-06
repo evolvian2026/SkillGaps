@@ -1,4 +1,4 @@
-# SkillGaps — Phases 1 & 2
+# SkillGaps — Phases 1–3
 
 Skill-gap diagnostics for Indian engineering students, with cohort-level
 visibility for university Training & Placement Officers.
@@ -12,8 +12,10 @@ job-description matching, curriculum benchmarking, a placement readiness score,
 and placement outcome capture. Adds a background job queue and a separate
 Python parsing service.
 
-The employer portal, verified skill profiles and outcome-driven calibration
-(Phase 3) are explicitly **not** built yet.
+**Phase 3** — employer portal with anonymised candidate pools and custom
+campus-drive assessments, student-controlled profile sharing, verifiable skill
+profiles with revocable links, outcome-driven benchmark calibration, and
+validation reporting.
 
 ---
 
@@ -54,6 +56,7 @@ Password for every seeded account: `SkillGaps2026`
 |---|---|
 | TPO / admin | `tpo@sunrise.edu.in` |
 | TPO / admin | `tpo@meridian.ac.in` |
+| Employer | `recruiter@northwind.example` — starts with a **pending** access request, so approving it is part of the demo |
 | Student | any seeded student address — `psql -d skillgaps -c "SELECT email FROM users WHERE role='student' LIMIT 5"` |
 
 New students can self-register at `/signup`. A `@sunrise.edu.in` or
@@ -71,6 +74,7 @@ the invite code `SUNRISE26` or `MERIDIAN26`.
 | `npm run db:generate` | Regenerate a migration after editing the schema |
 | `npm run worker` | Background job worker (BullMQ + Redis) |
 | `npm run py:dev` | Python parser service on :8000 |
+| `python services/parser/calibrate.py --all` | Offline benchmark calibration (add `--publish` to apply) |
 | `npm test` | Vitest — scoring, RLS isolation, full assessment flow |
 | `npm run lint` / `typecheck` | ESLint / `tsc --noEmit` |
 
@@ -165,6 +169,17 @@ so no policy changes.
 | `job_descriptions` | Student-pasted or staff-published to a whole cohort. |
 | `resume_matches` | Coverage score, matched keywords, and the gaps. |
 
+### Phase 3: employers, sharing, verification, calibration
+| Table | Notes |
+|---|---|
+| `employers` | Employer organisation. Separate from `tenants` because an employer owns no students — conflating them makes it far too easy to write a policy that treats one like a data owner. Carries its own `tenants` row so employer users satisfy the identity model with no special-casing. |
+| `employer_access_grants` | The whole of an employer's reach. Requested by the employer, decided by the university. |
+| `profile_share_consents` | Append-only student opt-in per employer: who, what scope, when, and the verbatim notice shown. |
+| `employer_assessments` | Campus drives, drawing from the Phase 1 question bank and scoped to granted cohorts. |
+| `employer_assessment_attempts` | Links a drive to the ordinary `attempts` row it produced, so results flow through the same scoring path. |
+| `verified_profiles` | Frozen snapshot plus the SHA-256 of a shareable token. Revocable, optionally expiring, view-counted. |
+| `calibration_runs` | Every calibration attempt, including the ones that declined to change anything. |
+
 ### Phase 2: curriculum, readiness, outcomes
 | Table | Notes |
 |---|---|
@@ -196,6 +211,11 @@ Actions. Only the CSV export needs a real endpoint.
 | `saveSubjectAction`, `deleteSubjectAction` | `lib/curriculum/actions.ts` | Syllabus entry, staff only. |
 | `saveReadinessWeightsAction` | `lib/readiness/actions.ts` | Sets per-tenant weights and requeues every student's score. |
 | `saveOutcomeAction` | `lib/readiness/actions.ts` | Placement outcome, by the student or their TPO. |
+| `requestAccessAction`, `decideAccessAction` | `lib/employer/actions.ts` | Employer requests; university decides. |
+| `setProfileShareAction` | `lib/employer/actions.ts` | Student opt-in/withdrawal, recorded as an event. |
+| `createAssessmentAction`, `startEmployerAssessmentAction` | `lib/employer/actions.ts` | Campus drives, reusing the Phase 1 attempt engine. |
+| `issueProfileAction`, `revokeProfileAction` | `lib/verification/actions.ts` | Verification links. |
+| `employerSignupAction` | `lib/auth/actions.ts` | Employer registration; role is fixed in SQL. |
 
 ### Routes
 | Route | Who | Purpose |
@@ -218,6 +238,16 @@ Actions. Only the CSV export needs a real endpoint.
 | `/admin/curriculum` | staff | Syllabus vs. in-demand skills |
 | `/admin/settings` | staff | Readiness component weighting |
 | `/admin/outcomes` | staff | Placement outcome capture |
+| `/admin/employers` | staff | Approve or revoke employer access |
+| `/admin/validation` | staff | Validation evidence and calibration history |
+| `/account/sharing` | student | Choose which employers may see them |
+| `/account/profile` | student | Issue and revoke verification links |
+| `/employer` | employer | Overview |
+| `/employer/candidates` | employer | Anonymised pool and shared profiles |
+| `/employer/assessments` | employer | Create and manage campus drives |
+| `/employer/access` | employer | Request institution access |
+| `/employer-signup` | anonymous | Employer registration by email domain |
+| `/verify/[token]` | anyone with the link | Public verified profile |
 | `GET /api/admin/export` | staff | CSV of the filtered cohort |
 
 ### Background jobs
@@ -262,6 +292,94 @@ tabs, and treating that as cheating would be both wrong and unfair.
   `is_correct`, `expectedStdout` or `explanation`.
 
 ---
+
+## Employers: what a grant does and does not buy
+
+Employers are the first role that reads across tenants, so the model is
+deliberately two-key. **Neither key alone opens anything.**
+
+| | University grant | Student opt-in | What the employer sees |
+|---|---|---|---|
+| Neither | ✗ | ✗ | Nothing at all |
+| Grant only | ✓ | ✗ | Anonymised counts by skill area and band. No names. |
+| Opt-in only | ✗ | ✓ | Nothing — the grant has lapsed or never existed |
+| Both | ✓ | ✓ | That one student's name, scores and readiness |
+
+- An employer can **request** access but never approve it: their INSERT policy
+  constrains `status` to `pending`, and they hold no UPDATE policy on grants.
+- A revoked or expired grant behaves exactly like one that never existed.
+  Withdrawal of a student's consent takes effect on the next query.
+- Neither staff nor the employer can write a consent record on a student's
+  behalf. Only the student has an INSERT path.
+- **Resumes are never visible to employers**, opt-in or not. A student sends a
+  CV to an employer directly; holding one does not make us that channel.
+- The anonymised pool does **not** go through the row policies at all. It is a
+  SECURITY DEFINER function that returns only aggregates and suppresses buckets
+  below five students, so the employer role holds no row access to
+  non-consenting students. Serving the pool through widened row policies would
+  have made the opt-in cosmetic.
+
+`tests/rls-phase3.test.ts` asserts each row of that table against a real
+database.
+
+## Verified skill profiles
+
+A student can issue a shareable link to a frozen snapshot of their results.
+
+- The token is 32 random bytes; only its SHA-256 is stored, so a database dump
+  yields no working links.
+- The snapshot is frozen at issue time — an employer checking a link weeks
+  later sees what was actually claimed, not a moving target.
+- Each link is a separate secret with its own revocation, so withdrawing one
+  employer's access never cuts off another's.
+- Revoked, expired and unknown tokens all return one indistinguishable 404:
+  telling them apart would confirm a link once existed.
+- The public page carries the provisional-benchmark caveat and states plainly
+  that no score on it is a hiring recommendation.
+- The page is `noindex` — a verification link is a credential, not content.
+
+## Outcome-driven calibration
+
+`services/parser/calibrate.py` correlates diagnostic scores against recorded
+placement outcomes and can publish a calibrated benchmark set. It runs offline,
+never in the request path.
+
+**It is built to refuse.** A benchmark's whole value is that it was earned by
+data, so the job produces `insufficient_data` rather than a number when:
+
+- fewer than 30 students have both a score and a recorded outcome;
+- fewer than 8 fall in either the placed or the unplaced group;
+- the correlation is not significant at p < 0.05;
+- the correlation is *negative*, which is a data-quality signal rather than a
+  bar to publish upside down.
+
+Runs that refuse are still recorded in `calibration_runs` — "we looked, and
+there was not enough evidence" is exactly the record that justifies why the
+live benchmarks are still marked provisional. Students whose outcome is "not
+yet known" are excluded rather than counted as unplaced, which would bias every
+threshold downward.
+
+When it does calibrate, it writes a **new, versioned** benchmark set rather
+than editing thresholds in place, so a report issued last month still names the
+bar it was actually scored against. Areas without sufficient evidence carry
+forward their previous bar rather than leaving a hole. Publication is opt-in
+(`--publish`) and only ever happens on a `succeeded` run.
+
+## Validation reporting
+
+`/admin/validation` shows what the data actually supports, with two rules:
+
+- **Suppress rather than reveal.** Any band with fewer than 20 students is
+  withheld — a statistic over four people is not evidence, and a small enough
+  group is an identification.
+- **Never present a claim as stronger than its sample.** Every figure carries
+  its sample size and a 95% Wilson interval, and the headline claim is only
+  produced when the top and bottom bands' intervals do not overlap. Without
+  separation there is no demonstrated relationship, and the page says so
+  instead of quietly rounding a number into a headline.
+
+Every report states that this is an observed association, not evidence that the
+assessment causes placement.
 
 ## The evaluation adapter
 
@@ -404,8 +522,14 @@ environment.
   (esbuild's dev server via drizzle-kit/vitest, OpenTelemetry via Sentry, uuid).
   None are reachable from the built application. No high or critical advisories.
 
-## Not in these phases
+## Status of the benchmarks
 
-Employer portal, verified skill profiles, outcome-driven calibration and trust
-reporting — all Phase 3, and all gated on having real placement outcome data to
-calibrate against.
+**Every benchmark in this build is still provisional.** Phase 3 ships the
+machinery to calibrate them, but calibration needs real placement outcomes and
+this build has none — only seeded demo data. The calibration job has been
+verified against a synthetic cohort to confirm it both refuses on thin data and
+publishes correctly on sufficient data, but nothing here has been calibrated
+against reality.
+
+Do not present any hiring bar, readiness score or validation figure from this
+build as validated. The UI is written to keep saying so.

@@ -31,6 +31,8 @@ export interface RequestContext {
   userId: string;
   tenantId: string;
   role: string;
+  /** Employer users only; drives every employer RLS policy. */
+  employerId?: string | null;
 }
 
 /**
@@ -48,9 +50,10 @@ export async function withRequestContext<T>(
   return db.transaction(async (tx) => {
     await tx.execute(sql`
       SELECT
-        set_config('app.user_id',   ${ctx.userId}::text,   true),
-        set_config('app.tenant_id', ${ctx.tenantId}::text, true),
-        set_config('app.user_role', ${ctx.role}::text,     true)
+        set_config('app.user_id',     ${ctx.userId}::text,             true),
+        set_config('app.tenant_id',   ${ctx.tenantId}::text,           true),
+        set_config('app.user_role',   ${ctx.role}::text,               true),
+        set_config('app.employer_id', ${ctx.employerId ?? ""}::text,   true)
     `);
     return fn(tx as unknown as Db);
   });

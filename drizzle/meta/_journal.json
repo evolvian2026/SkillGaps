@@ -15,6 +15,20 @@
       "when": 1788695660867,
       "tag": "0001_amused_the_leader",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788707432559,
+      "tag": "0002_brainy_randall",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788707579097,
+      "tag": "0003_abandoned_night_thrasher",
+      "breakpoints": true
     }
   ]
 }

@@ -410,6 +410,37 @@ async function main() {
       }
     }
 
+    // ------------------------------------------------- demo employer org --
+    // Employer organisations get their own tenant row so employer users
+    // satisfy the identity model without any special-casing; that tenant owns
+    // no students, so every student-scoped policy already returns nothing.
+    const { rows: employerTenant } = await client.query<{ id: string }>(
+      `INSERT INTO tenants (name, slug, email_domains, invite_code)
+       VALUES ('Northwind Technologies (org)','northwind-org','{}','NORTHWINDORG')
+       RETURNING id`,
+    );
+    const { rows: employerRows } = await client.query<{ id: string }>(
+      `INSERT INTO employers (name, slug, email_domains, website, tenant_id)
+       VALUES ('Northwind Technologies','northwind','{northwind.example}',
+               'https://northwind.example', $1)
+       RETURNING id`,
+      [employerTenant[0].id],
+    );
+    await client.query(
+      `INSERT INTO users (tenant_id, email, full_name, role, password_hash, employer_id)
+       VALUES ($1,'recruiter@northwind.example','Northwind Recruiter','employer',$2,$3)`,
+      [employerTenant[0].id, passwordHash, employerRows[0].id],
+    );
+    // Seeded as *pending* on purpose: a TPO approving it is part of the demo,
+    // and shipping a pre-approved grant would misrepresent how access works.
+    await client.query(
+      `INSERT INTO employer_access_grants (employer_id, tenant_id, status, note)
+       SELECT $1, id, 'pending',
+              'We hire 15-20 graduates a year and would like to see cohort strengths.'
+       FROM tenants WHERE slug = 'sunrise'`,
+      [employerRows[0].id],
+    );
+
     // ------------------------------------------------- demo attempt data --
     // Without completed attempts the institution dashboard demos as an empty
     // state, which tells a TPO nothing. These are clearly synthetic and are
@@ -429,7 +460,8 @@ async function main() {
     console.log("");
     console.log("Demo logins (all use the same password):");
     console.log(`  password: ${DEMO_PASSWORD}`);
-    console.log("  TPO:     tpo@sunrise.edu.in / tpo@meridian.ac.in");
+    console.log("  TPO:      tpo@sunrise.edu.in / tpo@meridian.ac.in");
+    console.log("  Employer: recruiter@northwind.example (access request pending)");
     console.log("  Student: any seeded student address, e.g. run");
     console.log("           psql -c \"SELECT email FROM users WHERE role='student' LIMIT 3\"");
   } catch (err) {
