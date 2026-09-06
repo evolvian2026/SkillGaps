@@ -33,11 +33,15 @@ export function AppShell({
               <>
                 <NavLink href="/admin" label="Cohort" />
                 <NavLink href="/admin/students" label="Students" />
+                <NavLink href="/admin/curriculum" label="Curriculum" />
+                <NavLink href="/admin/outcomes" label="Outcomes" />
                 <NavLink href="/admin/requests" label="Data requests" />
               </>
             ) : (
               <>
                 <NavLink href="/dashboard" label="Assessments" />
+                <NavLink href="/interview" label="Mock interviews" />
+                <NavLink href="/resume" label="Resume match" />
                 <NavLink href="/account" label="My data" />
               </>
             )}

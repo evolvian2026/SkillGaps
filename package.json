@@ -12,7 +12,9 @@
     "db:push": "tsx scripts/db-migrate.ts",
     "db:seed": "tsx scripts/seed.ts",
     "db:reset": "tsx scripts/db-reset.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "worker": "tsx --tsconfig tsconfig.worker.json --env-file=.env.local src/worker/index.ts",
+    "py:dev": "cd services/parser && uvicorn app.main:app --reload --port 8000"
   },
   "dependencies": {
     "react": "19.1.0",
@@ -24,7 +26,12 @@
     "recharts": "^3.10.1",
     "jose": "^6.0.11",
     "@sentry/nextjs": "^9.30.0",
-    "posthog-js": "^1.250.0"
+    "posthog-js": "^1.250.0",
+    "bullmq": "^5.56.0",
+    "ioredis": "^5.6.0",
+    "@aws-sdk/client-s3": "^3.850.0",
+    "@aws-sdk/s3-request-presigner": "^3.850.0",
+    "@anthropic-ai/sdk": "^0.124.0"
   },
   "devDependencies": {
     "typescript": "^5",

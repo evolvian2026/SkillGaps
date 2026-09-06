@@ -5,6 +5,8 @@ import {
   attempts,
   attemptSkillScores,
   benchmarkSets,
+  placementOutcomes,
+  readinessScores,
   skillAreas,
   studentProfiles,
   tracks,
@@ -119,6 +121,11 @@ export interface StudentRow {
   latestTrack: string | null;
   latestSubmittedAt: Date | null;
   flaggedAttempts: number;
+  /** Phase 2 composite. Null when the student has no component data at all. */
+  readinessScore: number | null;
+  /** How many of the three components fed that score, out of three. */
+  readinessComponents: number;
+  placementStatus: string | null;
 }
 
 export async function loadStudentRows(
@@ -168,9 +175,14 @@ export async function loadStudentRows(
         WHERE a.user_id = ${users.id} AND a.status = 'submitted'
           AND a.integrity_flags <> '{}'::jsonb ${trackFilter}
       )`,
+      readinessScore: readinessScores.score,
+      readinessComponents: readinessScores.componentsPresent,
+      placementStatus: placementOutcomes.status,
     })
     .from(users)
     .leftJoin(studentProfiles, eq(studentProfiles.userId, users.id))
+    .leftJoin(readinessScores, eq(readinessScores.userId, users.id))
+    .leftJoin(placementOutcomes, eq(placementOutcomes.userId, users.id))
     .where(and(...where))
     .orderBy(asc(users.fullName));
 
@@ -178,6 +190,10 @@ export async function loadStudentRows(
     ...row,
     latestPercent: row.latestPercent === null ? null : Number(row.latestPercent),
     latestSubmittedAt: row.latestSubmittedAt ? new Date(row.latestSubmittedAt) : null,
+    readinessScore:
+      row.readinessScore === null ? null : Number(row.readinessScore),
+    readinessComponents: row.readinessComponents ?? 0,
+    placementStatus: row.placementStatus ?? null,
   }));
 }
 

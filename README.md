@@ -1,12 +1,19 @@
-# SkillGaps — Phase 1
+# SkillGaps — Phases 1 & 2
 
 Skill-gap diagnostics for Indian engineering students, with cohort-level
 visibility for university Training & Placement Officers.
 
-Phase 1 covers auth and tenancy, the diagnostic assessment engine, the
-individual gap report, the read-only institution dashboard, and DPDP-aligned
-consent and data-request handling. Mock interviews, resume matching, curriculum
-benchmarking and the employer portal are explicitly **not** built yet.
+**Phase 1** — auth and tenancy, the diagnostic assessment engine, the individual
+gap report, the read-only institution dashboard, and DPDP-aligned consent and
+data-request handling.
+
+**Phase 2** — mock interview simulator with pluggable evaluation, resume vs.
+job-description matching, curriculum benchmarking, a placement readiness score,
+and placement outcome capture. Adds a background job queue and a separate
+Python parsing service.
+
+The employer portal, verified skill profiles and outcome-driven calibration
+(Phase 3) are explicitly **not** built yet.
 
 ---
 
@@ -29,9 +36,15 @@ npm install
 npm run db:push      # migrations + drizzle/sql/*.sql (RLS)
 npm run db:seed      # taxonomy, question bank, benchmarks, 2 demo universities
 
-# 4. Run
-npm run dev
+# 4. Run — three processes
+npm run dev        # the web app
+npm run worker     # background jobs (needs Redis)
+npm run py:dev     # the Python parser service (see services/parser/README.md)
 ```
+
+Redis and the parser service are optional for Phase 1 features. Without them,
+Phase 2 uploads and evaluations queue but never complete, and the UI says so
+rather than failing silently.
 
 ### Demo logins
 
@@ -56,6 +69,8 @@ the invite code `SUNRISE26` or `MERIDIAN26`.
 | `npm run db:seed` | Reset and reseed taxonomy, questions, demo tenants |
 | `npm run db:reset` | Drop and recreate the schema (development only) |
 | `npm run db:generate` | Regenerate a migration after editing the schema |
+| `npm run worker` | Background job worker (BullMQ + Redis) |
+| `npm run py:dev` | Python parser service on :8000 |
 | `npm test` | Vitest — scoring, RLS isolation, full assessment flow |
 | `npm run lint` / `typecheck` | ESLint / `tsc --noEmit` |
 
@@ -130,6 +145,35 @@ so no policy changes.
 | `consent_records` | Append-only. No UPDATE/DELETE grant exists, so withdrawal is a new row and the notice text shown at the time is stored verbatim. |
 | `data_requests` | Student-raised export/erasure requests, resolved by staff. |
 
+### Phase 2: mock interviews
+| Table | Notes |
+|---|---|
+| `interview_questions` | Shared bank: behavioural, technical, situational. Technical questions are tagged to the same `skill_areas` as the diagnostic, so both sit on one axis. |
+| `interview_question_tracks` | A question can serve several tracks. |
+| `interview_sessions` | One sitting. Records which evaluation method produced the score. |
+| `interview_responses` | Per-question answer, score, criterion breakdown, strengths and improvements. |
+
+### Phase 2: evaluation audit
+| Table | Notes |
+|---|---|
+| `ai_evaluations` | Every evaluation's verbatim input and output, whatever the method. Append-only through the app role, so a score can be traced and re-run but never quietly rewritten. |
+
+### Phase 2: resume matching
+| Table | Notes |
+|---|---|
+| `resumes` | Metadata and extracted text. The file itself lives in object storage. `retain_until` drives the automatic purge. |
+| `job_descriptions` | Student-pasted or staff-published to a whole cohort. |
+| `resume_matches` | Coverage score, matched keywords, and the gaps. |
+
+### Phase 2: curriculum, readiness, outcomes
+| Table | Notes |
+|---|---|
+| `industry_skill_references` | The in-demand skill list per area, with aliases and a demand weight. `source` distinguishes curated entries from scraped ones. |
+| `syllabus_subjects` | The institution's own syllabus topics. Staff-only — not student-facing. |
+| `readiness_weights` | Per-tenant component weighting. |
+| `readiness_scores` | Materialised composite, with the weights used and how many components fed it. |
+| `placement_outcomes` | Placed/not placed, role, optional and anonymisable company, coarse package band. |
+
 ---
 
 ## API surface
@@ -147,6 +191,11 @@ Actions. Only the CSV export needs a real endpoint.
 | `submitAttemptAction` | `lib/assessment/actions.ts` | Grades and finalises. Idempotent. |
 | `createDataRequestAction`, `withdrawConsentAction` | `lib/privacy/actions.ts` | Student-side DPDP flows. |
 | `resolveDataRequestAction` | `lib/privacy/actions.ts` | Staff-side resolution. |
+| `startInterviewAction`, `saveInterviewResponseAction`, `submitInterviewAction` | `lib/interview/actions.ts` | Mock interview. Submission queues evaluation rather than blocking the request. |
+| `uploadResumeAction`, `createJobDescriptionAction`, `requestMatchAction` | `lib/matching/actions.ts` | Upload goes to object storage; parsing and matching are queued. |
+| `saveSubjectAction`, `deleteSubjectAction` | `lib/curriculum/actions.ts` | Syllabus entry, staff only. |
+| `saveReadinessWeightsAction` | `lib/readiness/actions.ts` | Sets per-tenant weights and requeues every student's score. |
+| `saveOutcomeAction` | `lib/readiness/actions.ts` | Placement outcome, by the student or their TPO. |
 
 ### Routes
 | Route | Who | Purpose |
@@ -161,7 +210,33 @@ Actions. Only the CSV export needs a real endpoint.
 | `/admin` | staff | Cohort insights, heatmap, filters |
 | `/admin/students` | staff | Sortable student table |
 | `/admin/requests` | staff | Data-request queue |
+| `/interview` | student | Mock interview index and history |
+| `/interview/[sessionId]` | student | The interview runner |
+| `/interview/[sessionId]/feedback` | student + own-tenant staff | Per-question feedback |
+| `/resume` | student | Upload, add a JD, run a match |
+| `/resume/[matchId]` | student + own-tenant staff | Match report |
+| `/admin/curriculum` | staff | Syllabus vs. in-demand skills |
+| `/admin/settings` | staff | Readiness component weighting |
+| `/admin/outcomes` | staff | Placement outcome capture |
 | `GET /api/admin/export` | staff | CSV of the filtered cohort |
+
+### Background jobs
+
+Nothing slow or failure-prone runs in a request handler. Jobs are BullMQ on
+Redis, processed by `npm run worker`.
+
+| Job | Triggered by | Does |
+|---|---|---|
+| `evaluate-interview` | Interview submission | Scores every response through the evaluation adapter, writes audit rows, recomputes readiness |
+| `parse-resume` | Resume upload | Fetches from storage, calls the parser service, stores text and skills |
+| `extract-jd-keywords` | JD creation | Calls the parser service for weighted keywords |
+| `match-resume` | Match request | Computes coverage once both sides are parsed, recomputes readiness |
+| `recompute-readiness` | Weight change, diagnostic submission | Recomputes one student's composite |
+| `purge-expired-resumes` | Worker startup, then every 6h | Deletes resumes past their retention deadline |
+
+Each job runs under the **RLS context of the student it acts for** (see
+`src/worker/context.ts`), so a job cannot reach data that student could not.
+The worker holds no elevated database privileges.
 
 ---
 
@@ -187,6 +262,53 @@ tabs, and treating that as cheating would be both wrong and unfair.
   `is_correct`, `expectedStdout` or `explanation`.
 
 ---
+
+## The evaluation adapter
+
+Mock interview answers are scored behind one interface (`src/lib/evaluation/`),
+so the method can change without touching the data model or any caller.
+
+| Method | When | What it judges |
+|---|---|---|
+| `rubric` (default without credentials) | Always available, free, deterministic | How the answer is *written*: structure, specificity, clarity, relevance. **Not** whether the content is correct. |
+| `model` (default when credentials exist) | `ANTHROPIC_API_KEY` set | Whether the answer addresses the question, whether the reasoning holds, and what specifically would improve it. Uses `claude-opus-5` with adaptive thinking and structured outputs. |
+| `manual` | `EVALUATION_METHOD=manual` | Nothing — routes every response to a human reviewer. |
+
+Force one with `EVALUATION_METHOD=rubric|model|manual`.
+
+Two properties this design protects:
+
+- **Every evaluation is logged.** Input, output, method, evaluator version,
+  model id, token usage and duration all land in `ai_evaluations` before the
+  score reaches the student. A score can be traced to the prompt that produced
+  it, and a rubric or model change can be re-run against historical inputs.
+  The table is append-only through the application role.
+- **An evaluator never claims an assessment it did not make.** The rubric
+  cannot judge technical correctness, so on a question whose rubric asks for it
+  that criterion is returned `assessed: false`, shown as "not assessed", and
+  excluded from the weighted score — rather than given a plausible-looking
+  number that contradicts the caveat printed above it.
+
+A failure — a rate limit, an outage, a safety decline — marks the response
+`awaiting_review`, never zero. An infrastructure problem must not look like a
+bad answer on a student's record.
+
+## Data protection in Phase 2
+
+- **Resumes are the most personal artefact in the system.** Staff can see a
+  student's *match score*, never the file or its extracted text. This is
+  stricter than the rule for assessment attempts, and it is enforced by RLS —
+  `tests/rls-phase2.test.ts` asserts a TPO reading `resumes` gets zero rows.
+- **Retention is automatic.** Every resume carries a `retain_until`; the worker
+  purges the object and clears the extracted text once it passes. Default 180
+  days, set by `RESUME_RETENTION_DAYS`. The upload form tells the student the
+  date before they upload.
+- **The parser service holds nothing.** It takes bytes in and returns JSON. It
+  has no database access and no credentials to student data, and it can redact
+  contact details before any text reaches a log.
+- **Company names can be withheld.** A placement outcome can be recorded with
+  `company_anonymised`, in which case reads return "withheld" and only the
+  anonymised band is available for analysis.
 
 ## Hiring-bar benchmarks are provisional
 
@@ -264,17 +386,26 @@ environment.
 - Data export and deletion are a request-to-admin flow, not automated erasure.
   An irreversible cascade across attempts and scores should not be automated
   before there is an audited process behind it.
-- Judge0 runs synchronously inside the submit request. Fine for the short
-  programs a diagnostic asks for; it belongs on the Phase 2 job queue before
-  volume grows.
+- Judge0 still runs synchronously inside the diagnostic submit request. Fine
+  for the short programs a diagnostic asks for; it should move to the job queue
+  before volume grows.
+- The rubric evaluator judges writing quality, not correctness. Set
+  `ANTHROPIC_API_KEY` to get content judgement. The UI says which method ran.
+- Skill extraction is vocabulary matching against `services/parser/app/skills.py`,
+  not inference. A skill described in words the vocabulary does not know is
+  reported as a gap. That is why the match report says a gap means the words are
+  missing, not the skill.
+- The curriculum reference list is curated by hand. `industry_skill_references`
+  already carries a `source` column so a job-posting scraper can write into the
+  same table without a schema change.
 - Student table sorting happens in the page, not in SQL. Fine at a few hundred
   students per tenant; revisit if a tenant gets much larger.
 - `npm audit` reports moderate advisories in dev-only transitive dependencies
   (esbuild's dev server via drizzle-kit/vitest, OpenTelemetry via Sentry, uuid).
   None are reachable from the built application. No high or critical advisories.
 
-## Not in this phase
+## Not in these phases
 
-Mock interviews, resume vs. JD matching, curriculum benchmarking, placement
-readiness score, outcome tracking (Phase 2); employer portal, verified skill
-profiles, outcome-driven calibration (Phase 3).
+Employer portal, verified skill profiles, outcome-driven calibration and trust
+reporting — all Phase 3, and all gated on having real placement outcome data to
+calibrate against.

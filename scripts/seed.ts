@@ -4,6 +4,8 @@ import { migrationUrl } from "./_bootstrap";
 import { SKILL_AREAS, TRACKS, BENCHMARKS } from "./seed-data/taxonomy";
 import { QUESTIONS } from "./seed-data/questions";
 import { RESOURCES } from "./seed-data/resources";
+import { INTERVIEW_QUESTIONS } from "./seed-data/interview";
+import { INDUSTRY_SKILLS } from "./seed-data/industry";
 
 /**
  * Seeds the shared taxonomy, question bank, benchmarks and resources, plus two
@@ -172,7 +174,10 @@ async function main() {
     await client.query("BEGIN");
 
     // Wipe everything the seed owns so re-running is idempotent.
-    await client.query("TRUNCATE tenants, skill_areas, tracks, questions RESTART IDENTITY CASCADE");
+    await client.query(
+      "TRUNCATE tenants, skill_areas, tracks, questions, interview_questions, " +
+        "industry_skill_references RESTART IDENTITY CASCADE",
+    );
 
     // ---------------------------------------------------------- taxonomy --
     const skillAreaIds = new Map<string, string>();
@@ -299,6 +304,46 @@ async function main() {
       }
     }
 
+    // ------------------------------------------ interview question bank --
+    for (const question of INTERVIEW_QUESTIONS) {
+      const { rows } = await client.query<{ id: string }>(
+        `INSERT INTO interview_questions
+           (kind, prompt, skill_area_id, difficulty, rubric_criteria, guidance,
+            suggested_time_seconds)
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+        [
+          question.kind,
+          question.prompt,
+          question.skillArea ? skillAreaIds.get(question.skillArea) : null,
+          question.difficulty,
+          JSON.stringify(question.criteria ?? []),
+          question.guidance,
+          question.suggestedTimeSeconds ?? 240,
+        ],
+      );
+      for (const trackCode of question.tracks) {
+        await client.query(
+          "INSERT INTO interview_question_tracks (question_id, track_id) VALUES ($1,$2)",
+          [rows[0].id, trackIds.get(trackCode)],
+        );
+      }
+    }
+
+    // ------------------------------------------- industry reference list --
+    for (const skill of INDUSTRY_SKILLS) {
+      await client.query(
+        `INSERT INTO industry_skill_references
+           (skill_area_id, topic, aliases, demand_weight, source)
+         VALUES ($1,$2,$3,$4,'curated')`,
+        [
+          skillAreaIds.get(skill.skillArea),
+          skill.topic,
+          skill.aliases ?? [],
+          skill.demandWeight,
+        ],
+      );
+    }
+
     // ------------------------------------------------------- demo tenants --
     const passwordHash = hashPassword(DEMO_PASSWORD);
     const demoTenants = [
@@ -378,6 +423,8 @@ async function main() {
     console.log(`  tracks: ${TRACKS.length}`);
     console.log(`  questions: ${QUESTIONS.length}`);
     console.log(`  tenants: ${demoTenants.length}`);
+    console.log(`  interview questions: ${INTERVIEW_QUESTIONS.length}`);
+    console.log(`  industry reference topics: ${INDUSTRY_SKILLS.length}`);
     console.log(`  demo attempts: ${attemptCount}`);
     console.log("");
     console.log("Demo logins (all use the same password):");

@@ -11,7 +11,7 @@ export default defineConfig({
     alias: {
       "@": path.resolve(__dirname, "./src"),
       // Next.js resolves this at build time; it has no runtime meaning here.
-      "server-only": path.resolve(__dirname, "./tests/stubs/server-only.ts"),
+      "server-only": path.resolve(__dirname, "./src/lib/shims/server-only.ts"),
     },
   },
 });

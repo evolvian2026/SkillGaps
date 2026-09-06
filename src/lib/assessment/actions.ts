@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { requireStudent } from "@/lib/auth";
+import { enqueue } from "@/lib/queue";
 import { withRequestContext } from "@/lib/db/client";
 import { answers, attemptQuestions, attempts, integrityEvents } from "@/lib/db/schema";
 import { AssessmentError, startAttempt } from "./paper";
@@ -149,6 +150,11 @@ export async function recordIntegrityEventAction(
 export async function submitAttemptAction(attemptId: string): Promise<void> {
   const user = await requireStudent();
   await withRequestContext(user, (tx) => submitAttempt(tx, attemptId));
+
+  // The diagnostic feeds the placement readiness score, so a new result makes
+  // the stored composite stale. Recomputing in a job keeps it off this request.
+  await enqueue({ name: "recompute-readiness", userId: user.userId });
+
   revalidatePath("/dashboard");
   redirect(`/report/${attemptId}`);
 }

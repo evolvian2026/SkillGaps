@@ -584,3 +584,504 @@ export const dataRequests = pgTable(
   },
   (t) => [index("data_requests_tenant_idx").on(t.tenantId, t.status)],
 );
+
+/* ==========================================================================
+ * PHASE 2
+ *
+ * Everything below reuses the Phase 1 taxonomy (`skill_areas`, `tracks`) and
+ * the same tenant/role model rather than introducing a parallel structure.
+ * ========================================================================== */
+
+export const interviewQuestionKindEnum = pgEnum("interview_question_kind", [
+  "behavioral",
+  "technical",
+  "situational",
+]);
+
+export const interviewStatusEnum = pgEnum("interview_status", [
+  "in_progress",
+  "submitted",
+  "evaluated",
+  "abandoned",
+]);
+
+/** How a response was scored. Recorded per evaluation so mixed methods stay
+ *  distinguishable when the adapter is swapped. */
+export const evaluationMethodEnum = pgEnum("evaluation_method", [
+  "rubric",
+  "model",
+  "manual",
+]);
+
+export const evaluationStatusEnum = pgEnum("evaluation_status", [
+  "pending",
+  "running",
+  "succeeded",
+  "failed",
+  "awaiting_review",
+]);
+
+export const documentStatusEnum = pgEnum("document_status", [
+  "uploaded",
+  "parsing",
+  "parsed",
+  "failed",
+  "purged",
+]);
+
+export const placementStatusEnum = pgEnum("placement_status", [
+  "not_placed",
+  "placed",
+  "opted_out",
+  "higher_studies",
+  "unknown",
+]);
+
+/* --------------------------------------------------------------------------
+ * Mock interview simulator
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Interview question bank. Shared taxonomy like the diagnostic bank, and tied
+ * to the same `skill_areas` so interview performance and diagnostic
+ * performance can be compared on one axis.
+ */
+export const interviewQuestions = pgTable(
+  "interview_questions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    kind: interviewQuestionKindEnum("kind").notNull(),
+    prompt: text("prompt").notNull(),
+    /** Optional — behavioural questions are not tied to a technical area. */
+    skillAreaId: uuid("skill_area_id").references(() => skillAreas.id, {
+      onDelete: "set null",
+    }),
+    difficulty: integer("difficulty").notNull().default(2),
+    /** What a strong answer covers. Feeds the rubric and the model prompt. */
+    rubricCriteria: jsonb("rubric_criteria").notNull().default([]),
+    /** Shown to the student after evaluation, never before. */
+    guidance: text("guidance"),
+    suggestedTimeSeconds: integer("suggested_time_seconds").notNull().default(240),
+    isActive: boolean("is_active").notNull().default(true),
+  },
+  (t) => [index("interview_questions_kind_idx").on(t.kind, t.isActive)],
+);
+
+export const interviewQuestionTracks = pgTable(
+  "interview_question_tracks",
+  {
+    questionId: uuid("question_id")
+      .notNull()
+      .references(() => interviewQuestions.id, { onDelete: "cascade" }),
+    trackId: uuid("track_id")
+      .notNull()
+      .references(() => tracks.id, { onDelete: "cascade" }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.questionId, t.trackId] }),
+    index("interview_question_tracks_track_idx").on(t.trackId),
+  ],
+);
+
+/** One sitting of the mock interview. */
+export const interviewSessions = pgTable(
+  "interview_sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    trackId: uuid("track_id")
+      .notNull()
+      .references(() => tracks.id, { onDelete: "restrict" }),
+    status: interviewStatusEnum("status").notNull().default("in_progress"),
+    startedAt: timestamp("started_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    evaluatedAt: timestamp("evaluated_at", { withTimezone: true }),
+    /** 0-100, averaged across responses once every one is evaluated. */
+    overallScore: numeric("overall_score", { precision: 5, scale: 2 }),
+    /** Which method produced `overallScore`, for auditability. */
+    evaluationMethod: evaluationMethodEnum("evaluation_method"),
+    summaryFeedback: text("summary_feedback"),
+  },
+  (t) => [
+    index("interview_sessions_user_idx").on(t.userId, t.startedAt),
+    index("interview_sessions_tenant_idx").on(t.tenantId, t.status),
+  ],
+);
+
+export const interviewResponses = pgTable(
+  "interview_responses",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => interviewSessions.id, { onDelete: "cascade" }),
+    questionId: uuid("question_id")
+      .notNull()
+      .references(() => interviewQuestions.id, { onDelete: "restrict" }),
+    position: integer("position").notNull(),
+    responseText: text("response_text"),
+    timeSpentMs: integer("time_spent_ms"),
+    /** 0-100 for this single response. */
+    score: numeric("score", { precision: 5, scale: 2 }),
+    /** Per-criterion breakdown, shaped by the rubric. */
+    criterionScores: jsonb("criterion_scores"),
+    strengths: text("strengths").array(),
+    improvements: text("improvements").array(),
+    evaluationStatus: evaluationStatusEnum("evaluation_status")
+      .notNull()
+      .default("pending"),
+    answeredAt: timestamp("answered_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("interview_responses_position_key").on(t.sessionId, t.position),
+    index("interview_responses_session_idx").on(t.sessionId),
+  ],
+);
+
+/* --------------------------------------------------------------------------
+ * Evaluation audit log
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Every evaluation the adapter performs, input and output, whatever the
+ * method.
+ *
+ * Two reasons this exists rather than only storing the resulting score:
+ * a score can be traced back to exactly what produced it, and a rubric or
+ * model change can be re-run against historical inputs to see what would move.
+ * Rows are append-only — a re-run writes a new row rather than editing the old.
+ */
+export const aiEvaluations = pgTable(
+  "ai_evaluations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    /** e.g. "interview_response". Kept loose so new subjects need no migration. */
+    subjectType: text("subject_type").notNull(),
+    subjectId: uuid("subject_id").notNull(),
+    method: evaluationMethodEnum("method").notNull(),
+    status: evaluationStatusEnum("status").notNull().default("pending"),
+    /** Identifies the rubric revision or model that ran, for re-run diffing. */
+    evaluatorVersion: text("evaluator_version").notNull(),
+    modelId: text("model_id"),
+    /** Verbatim input: prompt, rubric, and the response being scored. */
+    input: jsonb("input").notNull(),
+    /** Verbatim output, before any mapping onto our own columns. */
+    output: jsonb("output"),
+    errorMessage: text("error_message"),
+    /** Token counts and cost, when the method reports them. */
+    usage: jsonb("usage"),
+    durationMs: integer("duration_ms"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("ai_evaluations_subject_idx").on(t.subjectType, t.subjectId),
+    index("ai_evaluations_tenant_idx").on(t.tenantId, t.createdAt),
+  ],
+);
+
+/* --------------------------------------------------------------------------
+ * Resume vs job description matching
+ * ------------------------------------------------------------------------ */
+
+export const resumes = pgTable(
+  "resumes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    fileName: text("file_name").notNull(),
+    contentType: text("content_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    /** Object storage key. The file itself never touches this database. */
+    storageKey: text("storage_key").notNull(),
+    status: documentStatusEnum("status").notNull().default("uploaded"),
+    /** Extracted plain text. Cleared when the file is purged. */
+    extractedText: text("extracted_text"),
+    /** Skills the parser found, mapped onto `skill_areas` where possible. */
+    extractedSkills: jsonb("extracted_skills"),
+    parseError: text("parse_error"),
+    uploadedAt: timestamp("uploaded_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    /**
+     * DPDP data minimisation: resumes are not kept indefinitely. The retention
+     * sweep purges the object and the extracted text once this passes.
+     */
+    retainUntil: timestamp("retain_until", { withTimezone: true }).notNull(),
+    purgedAt: timestamp("purged_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("resumes_user_idx").on(t.userId, t.uploadedAt),
+    index("resumes_retention_idx").on(t.retainUntil, t.purgedAt),
+  ],
+);
+
+/**
+ * A target job description. Tenant-scoped: a TPO can publish JDs for their
+ * cohort, and a student can paste their own.
+ */
+export const jobDescriptions = pgTable(
+  "job_descriptions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    /** Null for a JD published to the whole cohort by staff. */
+    createdBy: uuid("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    title: text("title").notNull(),
+    company: text("company"),
+    trackId: uuid("track_id").references(() => tracks.id, {
+      onDelete: "set null",
+    }),
+    rawText: text("raw_text").notNull(),
+    /** Keywords extracted by the Python service, with weights. */
+    extractedKeywords: jsonb("extracted_keywords"),
+    status: documentStatusEnum("status").notNull().default("uploaded"),
+    /** Staff-published JDs are visible to the whole tenant. */
+    isShared: boolean("is_shared").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index("job_descriptions_tenant_idx").on(t.tenantId, t.isShared)],
+);
+
+export const resumeMatches = pgTable(
+  "resume_matches",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    resumeId: uuid("resume_id")
+      .notNull()
+      .references(() => resumes.id, { onDelete: "cascade" }),
+    jobDescriptionId: uuid("job_description_id")
+      .notNull()
+      .references(() => jobDescriptions.id, { onDelete: "cascade" }),
+    status: evaluationStatusEnum("status").notNull().default("pending"),
+    /** 0-100 coverage of the JD's weighted keywords. */
+    matchScore: numeric("match_score", { precision: 5, scale: 2 }),
+    matchedKeywords: jsonb("matched_keywords"),
+    /** What the JD asks for and the resume never mentions. */
+    missingKeywords: jsonb("missing_keywords"),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("resume_matches_user_idx").on(t.userId, t.createdAt),
+    uniqueIndex("resume_matches_pair_key").on(t.resumeId, t.jobDescriptionId),
+  ],
+);
+
+/* --------------------------------------------------------------------------
+ * Curriculum benchmarking
+ * ------------------------------------------------------------------------ */
+
+/**
+ * The reference list of currently in-demand skills, per skill area.
+ *
+ * Maintained by the platform team for now. When a job-posting scraper exists,
+ * it writes here rather than to a second parallel table — `source` records
+ * where each entry came from.
+ */
+export const industrySkillReferences = pgTable(
+  "industry_skill_references",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    skillAreaId: uuid("skill_area_id")
+      .notNull()
+      .references(() => skillAreas.id, { onDelete: "cascade" }),
+    topic: text("topic").notNull(),
+    /** Alternate spellings a syllabus might use, for matching. */
+    aliases: text("aliases").array().notNull().default([]),
+    /** 1 = nice to have, 5 = expected in nearly every posting. */
+    demandWeight: integer("demand_weight").notNull().default(3),
+    /** "curated" today; "scraped" once a JD source feeds this. */
+    source: text("source").notNull().default("curated"),
+    isActive: boolean("is_active").notNull().default(true),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("industry_skill_refs_area_idx").on(t.skillAreaId, t.isActive),
+    uniqueIndex("industry_skill_refs_topic_key").on(t.skillAreaId, t.topic),
+  ],
+);
+
+/** A subject in the institution's own syllabus. */
+export const syllabusSubjects = pgTable(
+  "syllabus_subjects",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    code: text("code"),
+    name: text("name").notNull(),
+    branch: text("branch"),
+    semester: integer("semester"),
+    /** Free-text topic list as entered or uploaded. */
+    topics: text("topics").array().notNull().default([]),
+    createdBy: uuid("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index("syllabus_subjects_tenant_idx").on(t.tenantId, t.branch)],
+);
+
+/* --------------------------------------------------------------------------
+ * Placement readiness
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Per-tenant weighting of the readiness components.
+ *
+ * A row per tenant, so a university that does not run mock interviews can
+ * weight that component to zero rather than having every student penalised
+ * for a component they were never offered.
+ */
+export const readinessWeights = pgTable(
+  "readiness_weights",
+  {
+    tenantId: uuid("tenant_id")
+      .primaryKey()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    diagnosticWeight: numeric("diagnostic_weight", { precision: 5, scale: 2 })
+      .notNull()
+      .default("0.5"),
+    interviewWeight: numeric("interview_weight", { precision: 5, scale: 2 })
+      .notNull()
+      .default("0.3"),
+    resumeWeight: numeric("resume_weight", { precision: 5, scale: 2 })
+      .notNull()
+      .default("0.2"),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedBy: uuid("updated_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+  },
+);
+
+/**
+ * Computed readiness score per student.
+ *
+ * Materialised rather than computed on read: the dashboard sorts on it, and
+ * recomputing a three-part composite for every row of a cohort on every page
+ * load is the kind of thing that quietly becomes the slowest query in the app.
+ * Refreshed by a background job when any component changes.
+ */
+export const readinessScores = pgTable(
+  "readiness_scores",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** 0-100 composite. */
+    score: numeric("score", { precision: 5, scale: 2 }).notNull(),
+    diagnosticPercent: numeric("diagnostic_percent", { precision: 5, scale: 2 }),
+    interviewPercent: numeric("interview_percent", { precision: 5, scale: 2 }),
+    resumeMatchPercent: numeric("resume_match_percent", { precision: 5, scale: 2 }),
+    /**
+     * Which components the student actually has data for. A score built from
+     * one component out of three should not read the same as a complete one.
+     */
+    componentsPresent: integer("components_present").notNull(),
+    /** The weights in force when this was computed. */
+    weightsUsed: jsonb("weights_used").notNull(),
+    computedAt: timestamp("computed_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("readiness_scores_user_key").on(t.userId),
+    index("readiness_scores_tenant_idx").on(t.tenantId, t.score),
+  ],
+);
+
+/* --------------------------------------------------------------------------
+ * Outcome tracking
+ *
+ * Captured now, analysed later. Phase 3 calibrates hiring bars against this,
+ * so the priority here is clean, consistent capture rather than features.
+ * ------------------------------------------------------------------------ */
+
+export const placementOutcomes = pgTable(
+  "placement_outcomes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    status: placementStatusEnum("status").notNull().default("unknown"),
+    role: text("role"),
+    /** Optional by design — some universities will not share employer names. */
+    company: text("company"),
+    /**
+     * When set, `company` is withheld from every read path and only the
+     * anonymised bucket is reported.
+     */
+    companyAnonymised: boolean("company_anonymised").notNull().default(false),
+    /** Coarse band rather than exact CTC — less sensitive, still analysable. */
+    packageBand: text("package_band"),
+    offerDate: timestamp("offer_date", { withTimezone: true }),
+    /** Whether the student or staff recorded it, for data-quality analysis. */
+    recordedBy: uuid("recorded_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    notes: text("notes"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("placement_outcomes_user_key").on(t.userId),
+    index("placement_outcomes_tenant_idx").on(t.tenantId, t.status),
+  ],
+);

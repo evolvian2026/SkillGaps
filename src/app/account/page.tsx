@@ -4,7 +4,15 @@ import { DataRequestForm } from "@/components/data-request-form";
 import { Card, Empty, SectionHeading } from "@/components/ui";
 import { requireUser } from "@/lib/auth";
 import { withRequestContext } from "@/lib/db/client";
-import { consentRecords, dataRequests, tenants } from "@/lib/db/schema";
+import {
+  consentRecords,
+  dataRequests,
+  placementOutcomes,
+  readinessScores,
+  tenants,
+} from "@/lib/db/schema";
+import { readinessBand } from "@/lib/readiness/score";
+import { OutcomeForm } from "@/components/readiness-forms";
 import { CONSENT_NOTICE } from "@/lib/privacy/consent";
 
 export const metadata = { title: "Your data" };
@@ -50,7 +58,17 @@ export default async function AccountPage() {
       .where(eq(dataRequests.userId, user.userId))
       .orderBy(desc(dataRequests.createdAt));
 
-    return { tenant, consents, requests };
+    const [readiness] = await tx
+      .select()
+      .from(readinessScores)
+      .where(eq(readinessScores.userId, user.userId));
+
+    const [outcome] = await tx
+      .select()
+      .from(placementOutcomes)
+      .where(eq(placementOutcomes.userId, user.userId));
+
+    return { tenant, consents, requests, readiness, outcome };
   });
 
   const latestConsent = data.consents[0];
@@ -81,6 +99,49 @@ export default async function AccountPage() {
               </div>
             </dl>
           </Card>
+
+          {data.readiness ? (
+            <Card>
+              <SectionHeading
+                title="Placement readiness"
+                hint="A composite of your diagnostic, mock interview and resume match."
+              />
+              <div className="flex items-end gap-4">
+                <p className="text-4xl font-semibold tabular-nums">
+                  {Number(data.readiness.score)}
+                </p>
+                <div className="pb-1">
+                  <p className="text-sm font-medium">
+                    {readinessBand(Number(data.readiness.score)).label}
+                  </p>
+                  <p className="text-xs text-ink-600">
+                    based on {data.readiness.componentsPresent} of 3 components
+                  </p>
+                </div>
+              </div>
+              <dl className="mt-4 space-y-1.5 text-sm">
+                {[
+                  ["Diagnostic", data.readiness.diagnosticPercent],
+                  ["Mock interview", data.readiness.interviewPercent],
+                  ["Resume match", data.readiness.resumeMatchPercent],
+                ].map(([label, value]) => (
+                  <div key={String(label)} className="flex justify-between gap-4">
+                    <dt className="text-ink-600">{label}</dt>
+                    <dd className="font-medium tabular-nums">
+                      {value === null || value === undefined
+                        ? "not taken yet"
+                        : `${Number(value)}%`}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+              <p className="mt-4 text-xs leading-relaxed text-ink-600">
+                Components you have not attempted are left out rather than
+                scored zero, so this reflects what you have done — not what you
+                have skipped. It is a practice signal, not a prediction.
+              </p>
+            </Card>
+          ) : null}
 
           <Card>
             <SectionHeading
@@ -114,6 +175,27 @@ export default async function AccountPage() {
             />
             <DataRequestForm
               hasPending={data.requests.some((r) => r.status === "pending")}
+            />
+          </Card>
+
+          <Card>
+            <SectionHeading
+              title="Your placement outcome"
+              hint="Optional. It helps your institution understand what actually works."
+            />
+            <OutcomeForm
+              userId={user.userId}
+              current={
+                data.outcome
+                  ? {
+                      status: data.outcome.status,
+                      role: data.outcome.role,
+                      company: data.outcome.company,
+                      companyAnonymised: data.outcome.companyAnonymised,
+                      packageBand: data.outcome.packageBand,
+                    }
+                  : null
+              }
             />
           </Card>
 

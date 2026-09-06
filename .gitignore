@@ -44,3 +44,12 @@ next-env.d.ts
 # local env
 .env.local
 .env*.local
+
+# local object storage (resume uploads in dev)
+.storage/
+
+# python parser service
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/

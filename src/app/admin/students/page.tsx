@@ -5,11 +5,12 @@ import { requireStaff } from "@/lib/auth";
 import { withRequestContext } from "@/lib/db/client";
 import { loadFilterOptions, loadStudentRows, type StudentRow } from "@/lib/admin/cohort";
 import { filtersToQuery, parseCohortFilters } from "@/lib/admin/filters";
+import { readinessBand } from "@/lib/readiness/score";
 
 export const metadata = { title: "Students" };
 export const dynamic = "force-dynamic";
 
-type SortKey = "name" | "score" | "attempts" | "branch";
+type SortKey = "name" | "score" | "attempts" | "branch" | "readiness";
 
 /**
  * Sorting is done here rather than in SQL because the page already holds the
@@ -28,6 +29,15 @@ function sortRows(rows: StudentRow[], key: SortKey, dir: "asc" | "desc"): Studen
         if (b.latestPercent === null) return -1;
         return (a.latestPercent - b.latestPercent) * factor;
       }
+      case "readiness": {
+        // Same rule as score: students with no readiness data sort last in
+        // both directions, because "no data" is a different follow-up from
+        // "low score".
+        if (a.readinessScore === null && b.readinessScore === null) return 0;
+        if (a.readinessScore === null) return 1;
+        if (b.readinessScore === null) return -1;
+        return (a.readinessScore - b.readinessScore) * factor;
+      }
       case "attempts":
         return (a.attemptCount - b.attemptCount) * factor;
       case "branch":
@@ -36,6 +46,37 @@ function sortRows(rows: StudentRow[], key: SortKey, dir: "asc" | "desc"): Studen
         return a.fullName.localeCompare(b.fullName) * factor;
     }
   });
+}
+
+/**
+ * Readiness with its completeness alongside it.
+ *
+ * A score built from one component is not comparable with one built from
+ * three, so the dashboard never shows the number on its own.
+ */
+function ReadinessCell({
+  score,
+  components,
+}: {
+  score: number;
+  components: number;
+}) {
+  const band = readinessBand(score);
+  const tone =
+    band.tone === "good"
+      ? "bg-good-100 text-good-500"
+      : band.tone === "warn"
+        ? "bg-warn-100 text-warn-500"
+        : "bg-risk-100 text-risk-500";
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-semibold ${tone}`}
+      title={`${band.label} — computed from ${components} of 3 components`}
+    >
+      <span className="tabular-nums">{score}</span>
+      <span className="font-normal opacity-70">{components}/3</span>
+    </span>
+  );
 }
 
 function SortLink({
@@ -74,9 +115,9 @@ export default async function StudentsPage({
 
   const sortParam = Array.isArray(resolved.sort) ? resolved.sort[0] : resolved.sort;
   const dirParam = Array.isArray(resolved.dir) ? resolved.dir[0] : resolved.dir;
-  const sort: SortKey = (["name", "score", "attempts", "branch"] as const).includes(
-    sortParam as SortKey,
-  )
+  const sort: SortKey = (
+    ["name", "score", "attempts", "branch", "readiness"] as const
+  ).includes(sortParam as SortKey)
     ? (sortParam as SortKey)
     : "name";
   const dir: "asc" | "desc" = dirParam === "desc" ? "desc" : "asc";
@@ -113,7 +154,7 @@ export default async function StudentsPage({
         <Empty>No students match this filter.</Empty>
       ) : (
         <Card className="overflow-x-auto p-0">
-          <table className="w-full min-w-[760px] text-sm">
+          <table className="w-full min-w-[860px] text-sm">
             <thead>
               <tr className="border-b border-ink-200 text-left text-xs uppercase tracking-wide text-ink-400">
                 <th className="px-5 py-3 font-medium">
@@ -127,6 +168,15 @@ export default async function StudentsPage({
                 <th className="px-5 py-3 font-medium">Latest track</th>
                 <th className="px-5 py-3 text-right font-medium">
                   <SortLink label="Score" column="score" current={sort} dir={dir} query={query} />
+                </th>
+                <th className="px-5 py-3 text-right font-medium">
+                  <SortLink
+                    label="Readiness"
+                    column="readiness"
+                    current={sort}
+                    dir={dir}
+                    query={query}
+                  />
                 </th>
                 <th className="px-5 py-3 text-right font-medium">
                   <SortLink
@@ -159,6 +209,16 @@ export default async function StudentsPage({
                       <span className="text-ink-400">not assessed</span>
                     ) : (
                       `${row.latestPercent}%`
+                    )}
+                  </td>
+                  <td className="px-5 py-3 text-right">
+                    {row.readinessScore === null ? (
+                      <span className="text-ink-400">—</span>
+                    ) : (
+                      <ReadinessCell
+                        score={row.readinessScore}
+                        components={row.readinessComponents}
+                      />
                     )}
                   </td>
                   <td className="px-5 py-3 text-right tabular-nums text-ink-600">
