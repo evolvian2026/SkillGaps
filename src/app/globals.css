@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink-50: #f6f7f9;
+  --color-ink-100: #eceef2;
+  --color-ink-200: #d7dbe3;
+  --color-ink-400: #8a93a6;
+  --color-ink-600: #4a5468;
+  --color-ink-800: #232b3a;
+  --color-ink-900: #151b26;
+
+  --color-brand-50: #eef4ff;
+  --color-brand-100: #dbe7ff;
+  --color-brand-500: #2f6bff;
+  --color-brand-600: #1f52d9;
+  --color-brand-700: #1a43ad;
+
+  --color-good-500: #14895a;
+  --color-good-100: #d8f2e6;
+  --color-warn-500: #b7791f;
+  --color-warn-100: #fbf0d9;
+  --color-risk-500: #c2410c;
+  --color-risk-100: #fbe4d8;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background: var(--color-ink-50);
+  color: var(--color-ink-900);
+}
+
+/* Coding questions disable copy/paste as a basic integrity measure. */
+.no-copy {
+  -webkit-user-select: none;
+  user-select: none;
+}
