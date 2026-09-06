@@ -17,10 +17,16 @@ export const metadata = { title: "Cohort insights" };
 export const dynamic = "force-dynamic";
 
 function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  // The data-testid gives the end-to-end suite a stable hook. Asserting on
+  // Tailwind class names instead couples the tests to styling, and the
+  // headline number shares a size class with the page heading.
+  const testId = `stat-${label.toLowerCase().replace(/\s+/g, "-")}`;
   return (
     <Card>
       <p className="text-xs uppercase tracking-wide text-ink-400">{label}</p>
-      <p className="mt-1 text-2xl font-semibold tabular-nums">{value}</p>
+      <p className="mt-1 text-2xl font-semibold tabular-nums" data-testid={testId}>
+        {value}
+      </p>
       {hint ? <p className="mt-0.5 text-xs text-ink-600">{hint}</p> : null}
     </Card>
   );

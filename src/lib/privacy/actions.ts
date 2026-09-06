@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { requireStaff, requireUser } from "@/lib/auth";
@@ -122,5 +123,8 @@ export async function resolveDataRequestAction(
   });
 
   revalidatePath("/admin/requests");
-  return { message: "Request updated." };
+  // Redirect rather than return a message: resolving moves the row out of the
+  // open list, which unmounts the form the message would have rendered in. The
+  // staff member would otherwise click Update and see nothing acknowledge it.
+  redirect(`/admin/requests?resolved=${parsed.data.status}`);
 }

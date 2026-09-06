@@ -293,6 +293,43 @@ tabs, and treating that as cheating would be both wrong and unfair.
 
 ---
 
+## Testing
+
+| Suite | Command | What it proves |
+|---|---|---|
+| Unit + RLS | `npm test` | Scoring, matching, curriculum comparison, evaluation, calibration guards, and tenant isolation on every table, against a real database |
+| Python | `cd services/parser && pytest` | Text extraction, skill matching, and the calibration statistics including every refusal path |
+| End-to-end | `npm run test:e2e` | The whole product in a browser: four journeys plus security probes. See `e2e/README.md` |
+| Everything | `npm run test:all` | Unit then end-to-end |
+
+The end-to-end suite needs the full system running — database, Redis, worker,
+parser service and the app. It exists because every bug found in this project
+so far has lived in the wiring between components rather than inside one, and
+none of them were visible to a unit test.
+
+The suite reseeds before every run (`e2e/global-setup.ts`), because the
+employer journey starts from a *pending* access request and ends with a revoked
+one. Set `E2E_SKIP_SEED=1` to run it against a database you are preparing
+yourself.
+
+### What the end-to-end pass found
+
+Adding it was not a formality. Five real defects were only visible once the
+pieces ran together, all now fixed with a regression test each:
+
+| Symptom | Cause |
+|---|---|
+| A TPO resolved a data request and got no confirmation | Resolving moved the row from the open list to the closed one, unmounting the form the message would have rendered in. Fixed by redirecting to a page-level confirmation. |
+| A TPO granted an employer access and got no confirmation | The same defect on a different page — the row moves between the pending and decided lists. |
+| `ERR_TOO_MANY_REDIRECTS` for a wrong-role visitor | Each guard redirected to its own area's home, so an employer hitting `/dashboard` bounced to `/admin`, back to `/dashboard`, until the browser gave up. `homeFor()` in `src/lib/auth/routing.ts` now gives one answer per role, and `tests/auth-routing.test.ts` proves no role is sent to a page that would redirect it again. |
+| Employer signup crashed | Signup read back the new user row to find its tenant, with no identity set yet — so RLS returned nothing. The `SECURITY DEFINER` signup function now returns the tenant. |
+| An employer could see no institution, and no student who had opted in to share with them | Three queries inner-joined `tenants`, which an employer's policy does not admit: their own tenant is the organisation record, not a university. The join silently dropped every row, leaving three pages permanently empty with no error anywhere. Names now come from `app.employer_grants()` and `app.institution_directory()`, which return an id and a name and never an invite code. |
+
+The last one is the instructive one. RLS policies compose: a join is filtered by
+the policy on *every* table in it, so a correct policy on one table plus no read
+access to another silently yields nothing rather than an error. Two of the five
+were features that had never worked at all.
+
 ## Employers: what a grant does and does not buy
 
 Employers are the first role that reads across tenants, so the model is
@@ -518,6 +555,10 @@ environment.
   same table without a schema change.
 - Student table sorting happens in the page, not in SQL. Fine at a few hundred
   students per tenant; revisit if a tenant gets much larger.
+- An employer's `/account` page (their own data, which every signed-in user is
+  entitled to) is the one page shared across role chromes. It now renders the
+  employer navigation, but it is the only such page — a second one would be
+  worth generalising for.
 - `npm audit` reports moderate advisories in dev-only transitive dependencies
   (esbuild's dev server via drizzle-kit/vitest, OpenTelemetry via Sentry, uuid).
   None are reachable from the built application. No high or critical advisories.

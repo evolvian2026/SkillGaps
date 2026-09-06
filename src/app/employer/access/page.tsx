@@ -1,11 +1,13 @@
-import { asc, eq, notInArray } from "drizzle-orm";
 import { EmployerShell } from "@/components/employer-shell";
 import { RequestAccessForm } from "@/components/employer-forms";
 import { Card, Empty, SectionHeading } from "@/components/ui";
 import { requireEmployer } from "@/lib/auth";
-import { rawDb, withRequestContext } from "@/lib/db/client";
-import { tenants } from "@/lib/db/schema";
-import { employerProfile, listGrants } from "@/lib/employer/queries";
+import { withRequestContext } from "@/lib/db/client";
+import {
+  employerProfile,
+  institutionDirectory,
+  listGrants,
+} from "@/lib/employer/queries";
 
 export const metadata = { title: "Institutions" };
 export const dynamic = "force-dynamic";
@@ -15,27 +17,15 @@ export default async function EmployerAccessPage() {
 
   const data = await withRequestContext(user, async (tx) => ({
     employer: await employerProfile(tx, user.employerId),
-    grants: await listGrants(tx, user.employerId),
+    grants: await listGrants(tx),
+    directory: await institutionDirectory(tx),
   }));
 
-  // The institution directory is public information — a name and nothing more.
-  // It deliberately does not go through the employer's tenant policies, which
-  // would (correctly) hide every university they have not been granted, making
-  // it impossible to ask for access in the first place.
-  const existing = data.grants.map((g) => g.tenantId);
-  const directory = await rawDb()
-    .select({ id: tenants.id, name: tenants.name })
-    .from(tenants)
-    .where(
-      existing.length > 0
-        ? notInArray(tenants.id, existing)
-        : eq(tenants.isActive, true),
-    )
-    .orderBy(asc(tenants.name));
-
-  // Employer organisations have their own tenant rows; they are not
-  // institutions a student belongs to, so keep them out of the picker.
-  const institutions = directory.filter((t) => !t.name.endsWith("(org)"));
+  // The directory comes from a SECURITY DEFINER function: an employer cannot
+  // read `tenants` directly (their own tenant is their organisation record),
+  // and it returns only an id and a name — never a university's invite code.
+  const existing = new Set(data.grants.map((g) => g.tenantId));
+  const institutions = data.directory.filter((t) => !existing.has(t.id));
 
   return (
     <EmployerShell user={user} employerName={data.employer?.name ?? "Employer"}>

@@ -4,8 +4,8 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { clearSession, issueSession } from "./session";
 import { authenticate, registerEmployerUser, registerStudent } from "./signup";
-import { AuthError } from "./types";
-import { isStaff, type UserRole } from "./types";
+import { homeFor } from "./routing";
+import { AuthError, type UserRole } from "./types";
 
 export interface AuthFormState {
   error?: string;
@@ -22,10 +22,9 @@ const signupSchema = z.object({
   }),
 });
 
-function landingFor(role: UserRole): string {
-  if (role === "employer") return "/employer";
-  return isStaff(role) ? "/admin" : "/dashboard";
-}
+// One definition of where each role belongs, shared with the route guards so
+// login and a wrong-role redirect can never disagree.
+const landingFor = homeFor;
 
 export async function signupAction(
   _prev: AuthFormState,

@@ -19,7 +19,7 @@ export default async function EmployerHomePage() {
 
   const data = await withRequestContext(user, async (tx) => ({
     employer: await employerProfile(tx, user.employerId),
-    grants: await listGrants(tx, user.employerId),
+    grants: await listGrants(tx),
     pool: await candidatePool(tx),
     candidates: await optedInCandidates(tx, user.employerId),
     assessments: await listAssessments(tx, user.employerId),

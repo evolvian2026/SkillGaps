@@ -101,12 +101,10 @@ export async function decideAccessAction(
   );
 
   revalidatePath("/admin/employers");
-  return {
-    message:
-      parsed.data.decision === "active"
-        ? "Access granted. The employer can now see anonymised cohort data."
-        : "Access revoked. The employer loses visibility immediately.",
-  };
+  // Redirect rather than return a message: deciding moves the row between the
+  // pending and decided lists, which unmounts the form the message would have
+  // rendered in. The confirmation belongs to the page, not to the row.
+  redirect(`/admin/employers?decided=${parsed.data.decision}`);
 }
 
 /* -------------------------------------------------------------------------

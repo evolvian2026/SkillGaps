@@ -158,8 +158,8 @@ export function AccessDecisionForm({
 
   return (
     <form action={action} className="mt-2 space-y-2">
+      {/* A successful decision redirects, so only an error can land here. */}
       {state.error ? <Alert>{state.error}</Alert> : null}
-      {state.message ? <Alert tone="success">{state.message}</Alert> : null}
       <input type="hidden" name="grantId" value={grantId} />
       <div className="flex flex-wrap items-center gap-2">
         {currentStatus !== "active" ? (

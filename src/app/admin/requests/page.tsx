@@ -16,7 +16,18 @@ const STATUS_TONE: Record<string, string> = {
   rejected: "bg-ink-100 text-ink-600",
 };
 
-export default async function RequestsPage() {
+const RESOLVED_MESSAGE: Record<string, string> = {
+  in_progress: "Marked as being actioned.",
+  completed: "Request marked completed.",
+  rejected: "Request declined.",
+};
+
+export default async function RequestsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ resolved?: string }>;
+}) {
+  const { resolved } = await searchParams;
   const user = await requireStaff();
 
   const rows = await withRequestContext(user, (tx) =>
@@ -46,6 +57,12 @@ export default async function RequestsPage() {
       <p className="mb-6 text-sm text-ink-600">
         Export and deletion requests raised by your students under the DPDP Act.
       </p>
+
+      {resolved && RESOLVED_MESSAGE[resolved] ? (
+        <div className="mb-4">
+          <Alert tone="success">{RESOLVED_MESSAGE[resolved]}</Alert>
+        </div>
+      ) : null}
 
       <div className="mb-6">
         <Alert tone="info">

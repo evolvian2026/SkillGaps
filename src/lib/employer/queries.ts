@@ -2,12 +2,10 @@ import "server-only";
 import { and, desc, eq, sql } from "drizzle-orm";
 import type { Db } from "@/lib/db/client";
 import {
-  employerAccessGrants,
   employerAssessments,
   employers,
   profileShareConsents,
   readinessScores,
-  tenants,
   tracks,
   users,
 } from "@/lib/db/schema";
@@ -32,24 +30,43 @@ export interface GrantRow {
   revokedAt: Date | null;
 }
 
-export async function listGrants(tx: Db, employerId: string): Promise<GrantRow[]> {
-  const rows = await tx
-    .select({
-      id: employerAccessGrants.id,
-      tenantId: employerAccessGrants.tenantId,
-      tenantName: tenants.name,
-      status: employerAccessGrants.status,
-      batchYear: employerAccessGrants.batchYear,
-      branch: employerAccessGrants.branch,
-      grantedAt: employerAccessGrants.grantedAt,
-      expiresAt: employerAccessGrants.expiresAt,
-      revokedAt: employerAccessGrants.revokedAt,
-    })
-    .from(employerAccessGrants)
-    .innerJoin(tenants, eq(tenants.id, employerAccessGrants.tenantId))
-    .where(eq(employerAccessGrants.employerId, employerId))
-    .orderBy(desc(employerAccessGrants.createdAt));
-  return rows;
+/**
+ * The employer's grants, with each institution's name.
+ *
+ * Goes through `app.employer_grants` rather than joining `tenants` directly.
+ * An employer's own tenant is their organisation record, so the `tenants`
+ * policy does not admit the universities they deal with — a direct join
+ * silently returns nothing, which is exactly what this page used to do.
+ */
+export async function listGrants(tx: Db): Promise<GrantRow[]> {
+  const result = await tx.execute(sql`SELECT * FROM app.employer_grants()`);
+  return (result.rows as Record<string, unknown>[]).map((row) => ({
+    id: row.id as string,
+    tenantId: row.tenant_id as string,
+    tenantName: row.tenant_name as string,
+    status: row.status as string,
+    batchYear: row.batch_year === null ? null : Number(row.batch_year),
+    branch: (row.branch as string | null) ?? null,
+    grantedAt: row.granted_at ? new Date(row.granted_at as string) : null,
+    expiresAt: row.expires_at ? new Date(row.expires_at as string) : null,
+    revokedAt: row.revoked_at ? new Date(row.revoked_at as string) : null,
+  }));
+}
+
+/**
+ * Institutions the employer may request access from.
+ *
+ * Name and id only — never an invite code, which would let the holder register
+ * as one of that university's students.
+ */
+export async function institutionDirectory(
+  tx: Db,
+): Promise<{ id: string; name: string }[]> {
+  const result = await tx.execute(sql`SELECT * FROM app.institution_directory()`);
+  return (result.rows as Record<string, unknown>[]).map((row) => ({
+    id: row.id as string,
+    name: row.name as string,
+  }));
 }
 
 export interface PoolBucket {
@@ -93,37 +110,52 @@ export async function candidatePool(
  * Returns rows only for students whose most recent consent event grants a full
  * profile — the RLS policy on `users` enforces that independently, so a bug
  * here cannot widen the set.
+ *
+ * The institution name is resolved from the employer's own grants rather than
+ * joined from `tenants`: an employer cannot read a university's tenant row (it
+ * holds the invite code), so an inner join silently dropped every shared
+ * profile and the section was permanently empty. A student the employer may
+ * see always came from a tenant the employer holds a grant to — the consent
+ * policy requires it — so the name is always there to find.
  */
 export async function optedInCandidates(tx: Db, employerId: string) {
-  return tx
-    .select({
-      userId: users.id,
-      fullName: users.fullName,
-      email: users.email,
-      tenantName: tenants.name,
-      readinessScore: readinessScores.score,
-      readinessComponents: readinessScores.componentsPresent,
-      sharedAt: sql<Date>`MAX(${profileShareConsents.recordedAt})`,
-    })
-    .from(profileShareConsents)
-    .innerJoin(users, eq(users.id, profileShareConsents.userId))
-    .innerJoin(tenants, eq(tenants.id, profileShareConsents.tenantId))
-    .leftJoin(readinessScores, eq(readinessScores.userId, users.id))
-    .where(
-      and(
-        eq(profileShareConsents.employerId, employerId),
-        eq(profileShareConsents.granted, true),
-      ),
-    )
-    .groupBy(
-      users.id,
-      users.fullName,
-      users.email,
-      tenants.name,
-      readinessScores.score,
-      readinessScores.componentsPresent,
-    )
-    .orderBy(desc(sql`MAX(${profileShareConsents.recordedAt})`));
+  const [rows, grants] = await Promise.all([
+    tx
+      .select({
+        userId: users.id,
+        fullName: users.fullName,
+        email: users.email,
+        tenantId: profileShareConsents.tenantId,
+        readinessScore: readinessScores.score,
+        readinessComponents: readinessScores.componentsPresent,
+        sharedAt: sql<Date>`MAX(${profileShareConsents.recordedAt})`,
+      })
+      .from(profileShareConsents)
+      .innerJoin(users, eq(users.id, profileShareConsents.userId))
+      .leftJoin(readinessScores, eq(readinessScores.userId, users.id))
+      .where(
+        and(
+          eq(profileShareConsents.employerId, employerId),
+          eq(profileShareConsents.granted, true),
+        ),
+      )
+      .groupBy(
+        users.id,
+        users.fullName,
+        users.email,
+        profileShareConsents.tenantId,
+        readinessScores.score,
+        readinessScores.componentsPresent,
+      )
+      .orderBy(desc(sql`MAX(${profileShareConsents.recordedAt})`)),
+    listGrants(tx),
+  ]);
+
+  const nameOf = new Map(grants.map((g) => [g.tenantId, g.tenantName]));
+  return rows.map(({ tenantId, ...row }) => ({
+    ...row,
+    tenantName: nameOf.get(tenantId) ?? "Unknown institution",
+  }));
 }
 
 export async function listAssessments(tx: Db, employerId: string) {

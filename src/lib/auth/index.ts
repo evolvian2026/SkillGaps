@@ -5,8 +5,10 @@ import { serverEnv } from "@/lib/env";
 import { readSession } from "./session";
 import { readSupabaseSession } from "./supabase";
 import { isStaff, type SessionUser } from "./types";
+import { homeFor } from "./routing";
 
 export * from "./types";
+export { homeFor } from "./routing";
 export { SESSION_COOKIE, issueSession, clearSession } from "./session";
 
 /**
@@ -33,14 +35,14 @@ export async function requireUser(): Promise<SessionUser> {
 
 export async function requireStudent(): Promise<SessionUser> {
   const user = await requireUser();
-  if (user.role !== "student") redirect("/admin");
+  if (user.role !== "student") redirect(homeFor(user.role));
   return user;
 }
 
 /** Institution dashboard: faculty, TPO/admin and super-admin only. */
 export async function requireStaff(): Promise<SessionUser> {
   const user = await requireUser();
-  if (!isStaff(user.role)) redirect("/dashboard");
+  if (!isStaff(user.role)) redirect(homeFor(user.role));
   return user;
 }
 
@@ -56,6 +58,10 @@ export async function requireEmployer(): Promise<
   SessionUser & { employerId: string }
 > {
   const user = await requireUser();
-  if (user.role !== "employer" || !user.employerId) redirect("/login");
+  // An employer user with no organisation has no grants to key on, so every
+  // policy would deny them anyway. Sending them to /login makes that an
+  // explicit state rather than a confusing empty portal.
+  if (user.role === "employer" && !user.employerId) redirect("/login");
+  if (user.role !== "employer") redirect(homeFor(user.role));
   return user as SessionUser & { employerId: string };
 }

@@ -350,6 +350,117 @@ describe("revocation and withdrawal take effect immediately", () => {
   });
 });
 
+describe("an employer can see the institutions they deal with", () => {
+  // Regression: the grant list joined `tenants`, which an employer's policy
+  // does not admit — their own tenant is their organisation record, not a
+  // university. The join silently returned nothing, leaving two pages
+  // permanently empty with no error anywhere.
+
+  it("lists their own grants with the institution named", async () => {
+    const rows = await asUser<{ tenant_name: string; status: string }>(
+      asEmployer(),
+      "SELECT * FROM app.employer_grants()",
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => Boolean(r.tenant_name))).toBe(true);
+  });
+
+  it("shows pending and revoked grants too, not only active ones", async () => {
+    const rows = await asUser<{ status: string }>(
+      asEmployer(),
+      "SELECT * FROM app.employer_grants()",
+    );
+    // The suite has created a pending request on the ungranted tenant.
+    expect(rows.map((r) => r.status)).toContain("pending");
+  });
+
+  it("returns another employer's grants to nobody", async () => {
+    const mine = await asUser<{ tenant_id: string }>(
+      asEmployer("otherEmployer"),
+      "SELECT * FROM app.employer_grants()",
+    );
+    // otherEmployer holds no grants at all.
+    expect(mine).toHaveLength(0);
+  });
+
+  it("offers a directory of institutions without leaking invite codes", async () => {
+    const rows = await asUser<Record<string, unknown>>(
+      asEmployer(),
+      "SELECT * FROM app.institution_directory()",
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    // Only an id and a name: an invite code would let the holder register as
+    // one of that university's students.
+    for (const row of rows) {
+      expect(Object.keys(row).sort()).toEqual(["id", "name"]);
+    }
+  });
+
+  it("excludes employer organisation tenants from the directory", async () => {
+    const rows = await asUser<{ id: string }>(
+      asEmployer(),
+      "SELECT * FROM app.institution_directory()",
+    );
+    const listed = rows.map((r) => r.id);
+    // Employer orgs carry a tenant row to satisfy the identity model; they are
+    // not places anyone studies, so they must not be offered.
+    expect(listed).not.toContain(ids.employer.orgTenantId);
+    expect(listed).not.toContain(ids.otherEmployer.orgTenantId);
+    // Real institutions are.
+    expect(listed).toContain(ids.granted.tenantId);
+  });
+
+  it("cannot read the tenant row of an institution it deals with", async () => {
+    // The reason both fixes above exist, asserted directly: a grant is not
+    // read access to the university's own row, which carries its invite code.
+    const rows = await asUser<{ id: string }>(
+      asEmployer(),
+      "SELECT id FROM tenants WHERE id = $1",
+      [ids.granted.tenantId],
+    );
+    expect(rows).toHaveLength(0);
+  });
+
+  it("still reaches an opted-in student without joining tenants", async () => {
+    // Regression: the shared-profiles list inner-joined `tenants` for the
+    // institution name and therefore returned nothing, so a student could opt
+    // in and never appear. Consent and identity are both readable; only the
+    // name had to come from elsewhere.
+    const rows = await asUser<{ user_id: string; full_name: string }>(
+      asEmployer(),
+      `SELECT c.user_id, u.full_name
+         FROM profile_share_consents c
+         JOIN users u ON u.id = c.user_id
+        WHERE c.employer_id = $1 AND c.granted`,
+      [ids.employer.employerId],
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.map((r) => r.user_id)).toContain(ids.granted.studentA);
+    expect(rows.every((r) => Boolean(r.full_name))).toBe(true);
+
+    // And the grant function supplies the institution name for that row.
+    const grants = await asUser<{ tenant_id: string; tenant_name: string }>(
+      asEmployer(),
+      "SELECT * FROM app.employer_grants()",
+    );
+    const named = grants.find((g) => g.tenant_id === ids.granted.tenantId);
+    expect(named?.tenant_name).toBeTruthy();
+  });
+
+  it("gives a non-employer nothing from either function", async () => {
+    const grants = await asUser(
+      asStudent(ids.granted.studentA),
+      "SELECT * FROM app.employer_grants()",
+    );
+    const directory = await asUser(
+      asStudent(ids.granted.studentA),
+      "SELECT * FROM app.institution_directory()",
+    );
+    expect(grants).toHaveLength(0);
+    expect(directory).toHaveLength(0);
+  });
+});
+
 describe("students can see who they are deciding about", () => {
   it("shows an employer with active access to their institution", async () => {
     const rows = await asUser<{ id: string }>(

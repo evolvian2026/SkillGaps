@@ -21,7 +21,7 @@ export default async function EmployerAssessmentsPage() {
   const data = await withRequestContext(user, async (tx) => ({
     employer: await employerProfile(tx, user.employerId),
     assessments: await listAssessments(tx, user.employerId),
-    grants: await listGrants(tx, user.employerId),
+    grants: await listGrants(tx),
     availableTracks: await tx
       .select({ id: tracks.id, name: tracks.name })
       .from(tracks)

@@ -9,7 +9,17 @@ import { employerAccessGrants, employers } from "@/lib/db/schema";
 export const metadata = { title: "Employer access" };
 export const dynamic = "force-dynamic";
 
-export default async function AdminEmployersPage() {
+const DECIDED_MESSAGE: Record<string, string> = {
+  active: "Access granted. The employer can now see anonymised cohort data.",
+  revoked: "Access revoked. The employer loses visibility immediately.",
+};
+
+export default async function AdminEmployersPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ decided?: string }>;
+}) {
+  const { decided: decision } = await searchParams;
   const user = await requireStaff();
 
   const rows = await withRequestContext(user, (tx) =>
@@ -40,6 +50,12 @@ export default async function AdminEmployersPage() {
         Employers who have asked to see your cohort. You decide; nothing is
         shared until you approve it.
       </p>
+
+      {decision && DECIDED_MESSAGE[decision] ? (
+        <div className="mb-4">
+          <Alert tone="success">{DECIDED_MESSAGE[decision]}</Alert>
+        </div>
+      ) : null}
 
       <div className="mb-6">
         <Alert tone="info">

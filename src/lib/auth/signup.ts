@@ -140,27 +140,28 @@ export async function registerEmployerUser(
 
   const passwordHash = await hashPassword(input.password);
 
+  // The function returns the tenant it inserted into. Looking it up afterwards
+  // would mean reading `users` with no identity set, which RLS correctly
+  // refuses — leaving the caller to dereference an empty result.
   let userId: string;
+  let tenantId: string;
   try {
     const result = await rawDb().execute(
-      sql`SELECT app.create_employer_user(
+      sql`SELECT * FROM app.create_employer_user(
             ${org.employer_id as string}::uuid, ${email},
             ${input.fullName.trim()}, ${passwordHash}
-          ) AS id`,
+          )`,
     );
-    userId = (result.rows as Record<string, unknown>[])[0].id as string;
+    const row = (result.rows as Record<string, unknown>[])[0];
+    if (!row) throw new Error("Employer account was not created.");
+    userId = row.user_id as string;
+    tenantId = row.tenant_id as string;
   } catch (err) {
     if (err instanceof Error && /users_email_key/.test(err.message)) {
       throw new AuthError("An account already exists for this email.", "email_taken");
     }
     throw err;
   }
-
-  const tenantLookup = await rawDb().execute(
-    sql`SELECT tenant_id FROM public.users WHERE id = ${userId}::uuid`,
-  );
-  const tenantId = (tenantLookup.rows as Record<string, unknown>[])[0]
-    .tenant_id as string;
 
   return {
     userId,

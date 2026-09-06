@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { logoutAction } from "@/lib/auth/actions";
 import { isStaff, type SessionUser } from "@/lib/auth/types";
+import { homeFor } from "@/lib/auth/routing";
 
 function NavLink({ href, label }: { href: string; label: string }) {
   return (
@@ -21,15 +22,28 @@ export function AppShell({
   children: React.ReactNode;
 }) {
   const staff = isStaff(user.role);
+  // Every signed-in user may open /account — seeing and exporting your own
+  // data is not a student privilege. So this shell has to cope with an
+  // employer too, or it offers them a row of links that each bounce straight
+  // back to /employer.
+  const employer = user.role === "employer";
   return (
     <div className="min-h-screen">
       <header className="border-b border-ink-200 bg-white">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-2 gap-y-1 px-4 py-3">
-          <Link href={staff ? "/admin" : "/dashboard"} className="mr-2 font-semibold">
+          <Link href={homeFor(user.role)} className="mr-2 font-semibold">
             Skill<span className="text-brand-600">Gaps</span>
           </Link>
           <nav className="flex flex-1 flex-wrap items-center">
-            {staff ? (
+            {employer ? (
+              <>
+                <NavLink href="/employer" label="Overview" />
+                <NavLink href="/employer/candidates" label="Candidates" />
+                <NavLink href="/employer/assessments" label="Assessments" />
+                <NavLink href="/employer/access" label="Institutions" />
+                <NavLink href="/account" label="My data" />
+              </>
+            ) : staff ? (
               <>
                 <NavLink href="/admin" label="Cohort" />
                 <NavLink href="/admin/students" label="Students" />

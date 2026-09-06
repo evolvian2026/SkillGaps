@@ -36,7 +36,8 @@ export function ResolveRequestForm({
   return (
     <form action={formAction} className="mt-3 space-y-2">
       {state.error ? <Alert>{state.error}</Alert> : null}
-      {state.message ? <Alert tone="success">{state.message}</Alert> : null}
+      {/* Success is confirmed page-level: this form unmounts when the request
+          moves to the resolved list. */}
       <input type="hidden" name="requestId" value={requestId} />
       <div className="flex flex-wrap items-end gap-2">
         <select
