@@ -59,3 +59,6 @@ __pycache__/
 /playwright-report/
 /blob-report/
 /playwright/.cache/
+
+# redis snapshot from local dev
+dump.rdb

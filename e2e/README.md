@@ -46,6 +46,7 @@ wrong state. Set `E2E_SKIP_SEED=1` to manage the database yourself.
 | `02-tpo-journey.spec.ts` | Cohort insights, filters, sortable students table, CSV export, curriculum benchmark, outcome capture with company withheld, readiness weights, validation evidence, data requests |
 | `03-employer-journey.spec.ts` | Employer signup, the two-key access model end to end: nothing → grant → anonymised counts → student opt-in → named profile → withdrawal → revocation |
 | `04-security.spec.ts` | Unauthenticated access to every protected route, cross-tenant and peer report access by URL, role boundaries, CSV leakage, malformed verification tokens |
+| `05-roster-journey.spec.ts` | Bulk roster onboarding: CSV preview with per-row outcomes, import, join links issued once, student redemption with their own password and consent, re-import idempotence, reissue and revoke, cross-tenant and role isolation |
 
 ## Conventions
 

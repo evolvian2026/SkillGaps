@@ -29,6 +29,13 @@
       "when": 1788707579097,
       "tag": "0003_abandoned_night_thrasher",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788762478497,
+      "tag": "0004_peaceful_the_hood",
+      "breakpoints": true
     }
   ]
 }

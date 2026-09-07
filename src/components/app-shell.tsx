@@ -47,6 +47,7 @@ export function AppShell({
               <>
                 <NavLink href="/admin" label="Cohort" />
                 <NavLink href="/admin/students" label="Students" />
+                <NavLink href="/admin/roster" label="Roster" />
                 <NavLink href="/admin/curriculum" label="Curriculum" />
                 <NavLink href="/admin/outcomes" label="Outcomes" />
                 <NavLink href="/admin/employers" label="Employers" />

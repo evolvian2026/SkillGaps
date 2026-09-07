@@ -121,6 +121,7 @@ so no policy changes.
 | `users` | `role`: student / faculty / admin / employer / super_admin. Employer is declared now so Phase 3 extends this model rather than building a parallel one. |
 | `student_profiles` | Branch, section, batch year, roll number — what the dashboard filters on. |
 | `sessions` | Server-side sessions for `AUTH_PROVIDER=local`. Stores a SHA-256 of the cookie token, never the token. |
+| `roster_invitations` | A bulk import creates these, not accounts — consent has to be the student's own act. Unique on (tenant, email) so a re-import updates rather than duplicates. Stores a SHA-256 of the join token, never the token. |
 
 ### Shared taxonomy (global, not tenant-scoped)
 | Table | Notes |
@@ -299,7 +300,7 @@ tabs, and treating that as cheating would be both wrong and unfair.
 |---|---|---|
 | Unit + RLS | `npm test` | Scoring, matching, curriculum comparison, evaluation, calibration guards, and tenant isolation on every table, against a real database |
 | Python | `cd services/parser && pytest` | Text extraction, skill matching, and the calibration statistics including every refusal path |
-| End-to-end | `npm run test:e2e` | The whole product in a browser: four journeys plus security probes. See `e2e/README.md` |
+| End-to-end | `npm run test:e2e` | The whole product in a browser: five journeys plus security probes. See `e2e/README.md` |
 | Everything | `npm run test:all` | Unit then end-to-end |
 
 The end-to-end suite needs the full system running — database, Redis, worker,
@@ -329,6 +330,57 @@ The last one is the instructive one. RLS policies compose: a join is filtered by
 the policy on *every* table in it, so a correct policy on one table plus no read
 access to another silently yields nothing rather than an error. Two of the five
 were features that had never worked at all.
+
+## Bulk roster onboarding
+
+A placement office with 1,200 students needs to get them onto the platform
+without asking each one to find the signup page. `/admin/roster` takes the CSV
+their office already exports.
+
+**An import creates invitations, never accounts.** That is the whole design,
+and it follows from a constraint already enforced in the database: consent must
+be the student's own act, and `consent_records` refuses a write by anyone but
+the subject. An import that minted live accounts would therefore produce users
+carrying no consent record at all — the exact DPDP hole the rest of the product
+is built to avoid. So the institution supplies what it is authoritative for
+(roll number, branch, section, batch year) and the student supplies what only
+they can (a password, and consent) when they redeem their link.
+
+| Step | What happens |
+|---|---|
+| Upload or paste | Headers are matched against common spellings — `Roll No.`, `Registration Number`, `Dept`, `Div`, `Year of Passing` all resolve. Unknown columns are ignored, not rejected. |
+| Preview | Every row is classified — invite, update, reissue, or skip — with a per-row reason, and bad rows are reported by line number. Nothing is written yet. |
+| Import | Invitations are written and join links returned **once**. |
+| Redeem | The student opens `/join/<token>`, sees the details their college supplied, sets a password and gives consent. |
+
+Details worth knowing:
+
+- **Re-importing is safe.** Rows are keyed on (institution, email), so a second
+  import of a corrected file updates rows rather than duplicating them, and a
+  student who has already joined is left alone. A row that keeps its existing
+  invitation keeps its link, so fixing one student's branch does not break the
+  1,199 links already emailed.
+- **Links are shown once and cannot be recovered.** Only the SHA-256 reaches
+  the database, so a dump yields nothing usable — and for the same reason we
+  cannot redisplay one. Reissuing mints a fresh link and invalidates the old,
+  which the UI says before the button is pressed.
+- **A join link is single-use**, enforced by the `UPDATE ... WHERE status =
+  'pending'` inside `app.redeem_roster_invitation`, so two simultaneous
+  redemptions serialise on the row and the loser raises.
+- **Unknown, expired and revoked tokens are indistinguishable** to the caller —
+  a guessed token reveals nothing about whether it ever existed.
+- **Students cannot read the roster**, including their own institution's: it is
+  a directory of every classmate's name and email address. Only staff have a
+  policy on that table.
+- **The platform sends no email.** The TPO downloads a CSV of links and sends
+  it however they already reach students. Wiring an email provider is a
+  configuration change, not a redesign.
+- Invitations expire after 30 days. "Expired" is derived from `expires_at`
+  rather than stored, so no sweep job is needed to keep the table honest.
+
+`tests/rls-roster.test.ts` asserts the isolation and single-use properties
+against a real database; `tests/roster-csv.test.ts` covers the messy-file
+behaviour; `e2e/05-roster-journey.spec.ts` drives the whole flow in a browser.
 
 ## Employers: what a grant does and does not buy
 
@@ -555,6 +607,10 @@ environment.
   same table without a schema change.
 - Student table sorting happens in the page, not in SQL. Fine at a few hundred
   students per tenant; revisit if a tenant gets much larger.
+- Roster invitations are distributed by the placement office, not by us: the
+  platform has no email provider wired up, so an import hands back a CSV of
+  links rather than sending them. This is the honest shape for a pilot, but a
+  provider should go in before a large rollout.
 - An employer's `/account` page (their own data, which every signed-in user is
   entitled to) is the one page shared across role chromes. It now renders the
   employer navigation, but it is the only such page — a second one would be

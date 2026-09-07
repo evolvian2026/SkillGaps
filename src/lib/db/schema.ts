@@ -56,6 +56,17 @@ export const dataRequestTypeEnum = pgEnum("data_request_type", [
   "delete",
 ]);
 
+/**
+ * A roster invitation is pending until the student redeems it, or staff revoke
+ * it. "Expired" is deliberately not a stored state: it is derived from
+ * `expires_at`, so no sweep job is needed to keep the table honest.
+ */
+export const rosterInvitationStatusEnum = pgEnum("roster_invitation_status", [
+  "pending",
+  "accepted",
+  "revoked",
+]);
+
 export const dataRequestStatusEnum = pgEnum("data_request_status", [
   "pending",
   "in_progress",
@@ -147,6 +158,63 @@ export const studentProfiles = pgTable(
       t.branch,
       t.section,
     ),
+  ],
+);
+
+/**
+ * Students an institution has put on its roster but who have not yet joined.
+ *
+ * A roster import creates invitations, never accounts. Consent under the DPDP
+ * Act has to be the student's own act — staff cannot grant it on their behalf,
+ * which the RLS on `consent_records` already enforces — so an import that
+ * minted live accounts would create users carrying no consent record at all.
+ * Instead the institution supplies the cohort attributes it is authoritative
+ * for (roll number, branch, section, batch) and the student supplies the
+ * password and the consent when they redeem their link.
+ *
+ * Only the SHA-256 of the join token is stored, for the same reason session
+ * cookies and verification tokens are hashed: a database dump yields no
+ * working links.
+ */
+export const rosterInvitations = pgTable(
+  "roster_invitations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    email: text("email").notNull(),
+    fullName: text("full_name").notNull(),
+    rollNumber: text("roll_number"),
+    branch: text("branch"),
+    section: text("section"),
+    batchYear: integer("batch_year"),
+    tokenHash: text("token_hash").notNull(),
+    status: rosterInvitationStatusEnum("status").notNull().default("pending"),
+    /** The staff member who imported the row, kept for the audit trail. */
+    invitedBy: uuid("invited_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    /** Set once redeemed, linking the invitation to the account it became. */
+    acceptedUserId: uuid("accepted_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // One invitation per email per institution, so re-importing the same
+    // roster updates rows rather than duplicating them.
+    uniqueIndex("roster_invitations_tenant_email_key").on(t.tenantId, t.email),
+    uniqueIndex("roster_invitations_token_hash_key").on(t.tokenHash),
+    index("roster_invitations_tenant_status_idx").on(t.tenantId, t.status),
   ],
 );
 
