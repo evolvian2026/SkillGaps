@@ -63,8 +63,7 @@ test.describe("The practice loop", () => {
   test("withholds the answer until the student commits to one", async () => {
     // An unanswered item must not ship its own key in the page.
     await expect(student.getByTestId("explanation")).toHaveCount(0);
-    const source = await student.content();
-    expect(source.toLowerCase()).not.toContain("correct</span>");
+    await expect(student.getByTestId("answer-feedback")).toHaveCount(0);
   });
 
   test("reveals the answer and the explanation once answered", async () => {
@@ -104,9 +103,10 @@ test.describe("The practice loop", () => {
     await expect(student.getByText(/personal signal only/i)).toBeVisible();
     await student.locator('input[type="radio"]').first().check();
     // Practice grades as you go; a check must not, or it is practice with
-    // unlimited tries.
+    // unlimited tries. Keyed off the feedback element rather than the word
+    // "correct", which legitimately appears inside question text.
     await expect(student.getByTestId("explanation")).toHaveCount(0);
-    await expect(student.getByText(/correct/i)).toHaveCount(0);
+    await expect(student.getByTestId("answer-feedback")).toHaveCount(0);
   });
 
   test("scores the check and compares it with the diagnostic", async () => {

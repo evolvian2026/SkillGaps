@@ -442,12 +442,27 @@ than their own progress.
 
 ### What the seeded bank can and cannot serve
 
-30 practice items across 9 skill areas, and 4–7 diagnostic multiple-choice
-items per area. That is enough for practice everywhere and for a check in the
-better-covered areas only. The report offers each button **only where the bank
-can serve it**, and says so plainly where it cannot — a button that can only
-fail is worse than no button. Growing the bank is the fix, and item analysis
-(`/admin/items`) is how you tell which items are worth keeping.
+**98 practice items across 9 skill areas** — 10 to 12 each, spread over all
+three difficulty levels — and 4–7 diagnostic multiple-choice items per area.
+That is enough for practice everywhere, with room for a student to practise an
+area repeatedly before repeating a question, and enough for a check in the
+better-covered areas only.
+
+The draw prefers questions the student has not seen in that area and spreads
+them across difficulty, falling back to already-seen items only once the area
+runs dry — which is a signal to grow the bank, not a reason to fail.
+
+The report offers each button **only where the bank can serve it**, and says so
+plainly where it cannot — a button that can only fail is worse than no button.
+Item analysis (`/admin/items`) is how you tell which items are worth keeping as
+the bank grows.
+
+`tests/practice-bank.test.ts` guards the content itself: exactly one correct
+option per item, no duplicate prompts, an explanation on every question, and
+enough items per area to serve more than one distinct session. Hand-authored
+content at this volume is exactly where a slip hides, and an item with two
+correct answers teaches a student something false with no way for them to
+tell.
 
 `tests/practice-progress.test.ts` covers the claim rules, `tests/rls-practice.test.ts`
 proves the pool separation and per-student privacy against a real database, and
@@ -852,9 +867,10 @@ environment.
   same table without a schema change.
 - Student table sorting happens in the page, not in SQL. Fine at a few hundred
   students per tenant; revisit if a tenant gets much larger.
-- The practice bank is small — 30 items over 9 areas — so a student who
-  practises an area repeatedly will exhaust it. It needs to grow before a real
-  cohort uses it in anger.
+- The practice bank holds 98 items over 9 areas (10–12 each). The draw serves
+  unseen questions first, but a determined student can still work through an
+  area in two or three sessions, after which it repeats. It degrades gracefully
+  rather than failing, but a real cohort will want more.
 - Several skill areas cannot support a skill check on the seeded bank (a check
   needs at least 5 diagnostic multiple-choice items in one area). The report
   hides the button where that is true rather than failing, but the honest fix

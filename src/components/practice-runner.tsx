@@ -103,10 +103,18 @@ export function PracticeRunner({
                     >
                       <span className="flex-1 whitespace-pre-wrap">{option.label}</span>
                       {done && isKey ? (
-                        <span className="text-xs font-semibold text-good-500">correct</span>
+                        <span
+                          className="text-xs font-semibold text-good-500"
+                          data-testid="answer-feedback"
+                        >
+                          correct
+                        </span>
                       ) : null}
                       {done && chosen && !isKey ? (
-                        <span className="text-xs font-semibold text-risk-500">
+                        <span
+                          className="text-xs font-semibold text-risk-500"
+                          data-testid="answer-feedback"
+                        >
                           your answer
                         </span>
                       ) : null}

@@ -14,7 +14,7 @@ import {
   skillChecks,
 } from "@/lib/db/schema";
 import type { SessionUser } from "@/lib/auth/types";
-import { seededRandom, shuffle } from "@/lib/assessment/random";
+import { drawSpreadByDifficulty, seededRandom, shuffle } from "@/lib/assessment/random";
 import { TARGET_CHECK_LENGTH, canStartCheck } from "./progress";
 
 export class PracticeError extends Error {}
@@ -89,7 +89,7 @@ export async function startPractice(
   if (existing) return existing.id;
 
   const pool = await tx
-    .select({ id: questions.id })
+    .select({ id: questions.id, difficulty: questions.difficulty })
     .from(questions)
     .where(
       and(
@@ -104,13 +104,44 @@ export async function startPractice(
     );
   }
 
+  // What this student has already practised in this area. Serving the same six
+  // questions to someone who came back for a second run is the fastest way to
+  // make practice feel pointless.
+  const seen = await tx
+    .select({ questionId: practiceResponses.questionId })
+    .from(practiceResponses)
+    .innerJoin(
+      practiceSessions,
+      eq(practiceSessions.id, practiceResponses.sessionId),
+    )
+    .where(
+      and(
+        eq(practiceSessions.userId, user.userId),
+        eq(practiceSessions.skillAreaId, skillAreaId),
+      ),
+    );
+  const seenIds = new Set(seen.map((r) => r.questionId));
+
   const [session] = await tx
     .insert(practiceSessions)
     .values({ tenantId: user.tenantId, userId: user.userId, skillAreaId })
     .returning({ id: practiceSessions.id });
 
   const rand = seededRandom(session.id);
-  const chosen = shuffle(pool, rand).slice(0, PRACTICE_LENGTH);
+
+  // Fresh questions first, spread across difficulty so a run is not all easy
+  // or all hard; fall back to already-seen ones only once the area runs dry,
+  // which is a signal the bank needs more items rather than a reason to fail.
+  const fresh = pool.filter((q) => !seenIds.has(q.id));
+  const chosen = drawSpreadByDifficulty(fresh, PRACTICE_LENGTH, rand);
+  if (chosen.length < PRACTICE_LENGTH) {
+    const revisit = drawSpreadByDifficulty(
+      pool.filter((q) => seenIds.has(q.id)),
+      PRACTICE_LENGTH - chosen.length,
+      rand,
+    );
+    chosen.push(...revisit);
+  }
 
   await tx.insert(practiceResponses).values(
     chosen.map((q, index) => ({
