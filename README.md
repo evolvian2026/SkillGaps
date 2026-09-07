@@ -56,6 +56,7 @@ Password for every seeded account: `SkillGaps2026`
 |---|---|
 | TPO / admin | `tpo@sunrise.edu.in` |
 | TPO / admin | `tpo@meridian.ac.in` |
+| Platform owner | `root@sunrise.edu.in` — super-admin; the only role that can open `/admin/items` |
 | Employer | `recruiter@northwind.example` — starts with a **pending** access request, so approving it is part of the demo |
 | Student | any seeded student address — `psql -d skillgaps -c "SELECT email FROM users WHERE role='student' LIMIT 5"` |
 
@@ -179,6 +180,7 @@ so no policy changes.
 | `employer_assessments` | Campus drives, drawing from the Phase 1 question bank and scoped to granted cohorts. |
 | `employer_assessment_attempts` | Links a drive to the ordinary `attempts` row it produced, so results flow through the same scoring path. |
 | `verified_profiles` | Frozen snapshot plus the SHA-256 of a shareable token. Revocable, optionally expiring, view-counted. |
+| `item_analysis_runs`, `item_statistics` | Question bank health, global rather than tenant-scoped: an item's statistics only mean anything pooled across institutions. Readable by `super_admin` alone. |
 | `calibration_runs` | Every calibration attempt, including the ones that declined to change anything. |
 
 ### Phase 2: curriculum, readiness, outcomes
@@ -299,8 +301,8 @@ tabs, and treating that as cheating would be both wrong and unfair.
 | Suite | Command | What it proves |
 |---|---|---|
 | Unit + RLS | `npm test` | Scoring, matching, curriculum comparison, evaluation, calibration guards, and tenant isolation on every table, against a real database |
-| Python | `cd services/parser && pytest` | Text extraction, skill matching, and the calibration statistics including every refusal path |
-| End-to-end | `npm run test:e2e` | The whole product in a browser: five journeys plus security probes. See `e2e/README.md` |
+| Python | `cd services/parser && pytest` | Text extraction, skill matching, and the calibration and item-analysis statistics including every refusal path |
+| End-to-end | `npm run test:e2e` | The whole product in a browser: six journeys plus security probes. See `e2e/README.md` |
 | Everything | `npm run test:all` | Unit then end-to-end |
 
 The end-to-end suite needs the full system running — database, Redis, worker,
@@ -426,6 +428,72 @@ A student can issue a shareable link to a frozen snapshot of their results.
 - The public page carries the provisional-benchmark caveat and states plainly
   that no score on it is a hiring recommendation.
 - The page is `noindex` — a verification link is a credential, not content.
+
+## Item analysis: is the question bank any good?
+
+Every number this platform reports — a gap report, a readiness score, an
+employer's anonymised pool — rests on the questions underneath it. Nothing was
+watching those. `services/parser/analyse_items.py` runs the same statistics the
+calibration job already uses, pointed one level down: instead of asking whether
+a skill-area score predicts placement, it asks whether an individual question
+predicts the rest of the paper.
+
+```bash
+cd services/parser
+python analyse_items.py              # the whole bank
+python analyse_items.py --track SDE  # one track
+python analyse_items.py --json       # report only, writes nothing
+```
+
+Results appear at `/admin/items`, **for `super_admin` only**.
+
+| Statistic | What it says |
+|---|---|
+| **Facility** | Proportion answering correctly. Confusingly but conventionally, a *high* value means an *easy* item. |
+| **Discrimination** | Point-biserial correlation between getting this item right and scoring well on the **rest** of the paper. The load-bearing number. |
+| **Distractor breakdown** | Per option: how often it was chosen, and the mean rest-of-paper score of the students who chose it. |
+
+Four decisions worth knowing:
+
+- **It refuses below 30 responses**, and marks anything under 100 as
+  provisional. A discrimination computed from a handful of responses is noise
+  wearing the costume of a statistic — the same posture the calibration job
+  takes on thin cohorts.
+- **The correlation is corrected.** Each item is scored against the paper *with
+  that item removed*. Correlating an item against a total that contains it
+  inflates the coefficient badly on a short paper, which is exactly the shape
+  of paper this product uses.
+- **A meaningfully negative discrimination is reported as a fault, not a small
+  positive.** An item the stronger students get wrong more often is almost
+  always miskeyed. But a coefficient of −0.03 is noise: only values past −0.10
+  are called out, because flagging every near-zero item as "probably miskeyed"
+  would bury the handful that genuinely are.
+- **The pool excludes papers flagged for fast completion**, and papers that
+  were never submitted. Near-random responding depresses the measured
+  discrimination of every item on the paper.
+
+### Why `super_admin` and not the TPO
+
+The question bank is global; an item's statistics only mean anything pooled
+across every institution that has answered it. That makes these rows
+cross-tenant by construction. A placement office reading them would be seeing
+other colleges' response behaviour, about a bank they neither own nor can edit
+— and "question 14 is miskeyed" is not something they can act on, only
+something that would undermine the scores they are presenting to students. The
+RLS policies on `item_analysis_runs` and `item_statistics` admit `super_admin`
+alone, and `app.item_response_pool` is not granted to the application role at
+all: only the offline job, running as the owner, may call it.
+
+### A limitation worth stating
+
+Classical item analysis assumes the rest of the paper is a reasonable measure
+of ability. On a very short paper that assumption is fragile: verifying this
+against a synthetic four-item paper, a single miskeyed item corrupted the
+rest-of-paper score badly enough to drag a well-behaved neighbour to a negative
+discrimination. At a realistic 18-item length the same fixture produced exactly
+one urgent item — the miskeyed one — and left the good item clean. Read
+per-item verdicts on a short paper with that in mind, and fix the urgent items
+first, since they distort everything measured alongside them.
 
 ## Outcome-driven calibration
 
@@ -607,6 +675,10 @@ environment.
   same table without a schema change.
 - Student table sorting happens in the page, not in SQL. Fine at a few hundred
   students per tenant; revisit if a tenant gets much larger.
+- Item analysis is a maintenance report, not an automated fix: it names the
+  items to look at and never edits, retires or re-keys anything. That is
+  deliberate — an editorial decision about a question bank should be made by a
+  person — but it does mean the report only helps if somebody reads it.
 - Roster invitations are distributed by the placement office, not by us: the
   platform has no email provider wired up, so an import hands back a CSV of
   links rather than sending them. This is the honest shape for a pilot, but a

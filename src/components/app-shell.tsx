@@ -52,6 +52,9 @@ export function AppShell({
                 <NavLink href="/admin/outcomes" label="Outcomes" />
                 <NavLink href="/admin/employers" label="Employers" />
                 <NavLink href="/admin/validation" label="Evidence" />
+                {user.role === "super_admin" ? (
+                  <NavLink href="/admin/items" label="Item quality" />
+                ) : null}
                 <NavLink href="/admin/requests" label="Data requests" />
               </>
             ) : (

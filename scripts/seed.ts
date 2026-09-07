@@ -377,6 +377,17 @@ async function main() {
         [tenantId, `tpo@${tenant.domains[0]}`, `TPO — ${tenant.name}`, passwordHash],
       );
 
+      // One platform owner, on the first tenant. Super-admin is the only role
+      // that may read item statistics: they pool responses across every
+      // institution, and they describe a question bank no single college owns.
+      if (tenantIndex === 0) {
+        await client.query(
+          `INSERT INTO users (tenant_id, email, full_name, role, password_hash)
+           VALUES ($1,$2,'Platform Owner','super_admin',$3)`,
+          [tenantId, `root@${tenant.domains[0]}`, passwordHash],
+        );
+      }
+
       const rng = makeRng(1000 + tenantIndex * 97);
       for (let i = 0; i < tenant.studentCount; i++) {
         const first = FIRST_NAMES[Math.floor(rng() * FIRST_NAMES.length)];
@@ -461,6 +472,7 @@ async function main() {
     console.log("Demo logins (all use the same password):");
     console.log(`  password: ${DEMO_PASSWORD}`);
     console.log("  TPO:      tpo@sunrise.edu.in / tpo@meridian.ac.in");
+  console.log("  Owner:    root@sunrise.edu.in (super-admin; item quality)");
     console.log("  Employer: recruiter@northwind.example (access request pending)");
     console.log("  Student: any seeded student address, e.g. run");
     console.log("           psql -c \"SELECT email FROM users WHERE role='student' LIMIT 3\"");

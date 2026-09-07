@@ -47,6 +47,21 @@ export async function requireStaff(): Promise<SessionUser> {
 }
 
 /**
+ * Platform-owner surfaces: the question bank's own health.
+ *
+ * Narrower than `requireStaff` on purpose. Item statistics pool responses
+ * across every institution, and they describe a bank a placement office
+ * neither owns nor can edit — so a TPO landing here would be reading other
+ * tenants' response behaviour and being told the scores they present are
+ * built on a shaky item, with no way to act on either.
+ */
+export async function requireSuperAdmin(): Promise<SessionUser> {
+  const user = await requireUser();
+  if (user.role !== "super_admin") redirect(homeFor(user.role));
+  return user;
+}
+
+/**
  * Employer portal.
  *
  * Requires both the role and a resolved organisation: an employer user with no

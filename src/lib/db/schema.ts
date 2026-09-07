@@ -1432,6 +1432,68 @@ export const verifiedProfiles = pgTable(
  * declined to produce thresholds is exactly the evidence needed to explain why
  * the benchmarks are still provisional.
  */
+/**
+ * Item analysis: is the question bank actually any good?
+ *
+ * Global, not tenant-scoped, for the same reason the bank itself is: an item's
+ * statistics only mean anything pooled across every institution that has
+ * answered it. That makes these rows cross-tenant by construction, which is
+ * why the RLS on them admits `super_admin` alone — a TPO reading them would be
+ * seeing other institutions' response behaviour, about a bank they do not own.
+ */
+export const itemAnalysisRuns = pgTable("item_analysis_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  /** Null means the whole bank; set when a run was scoped to one track. */
+  trackId: uuid("track_id").references(() => tracks.id, { onDelete: "set null" }),
+  /** Items with enough responses to analyse, and those skipped for want of them. */
+  analysedCount: integer("analysed_count").notNull().default(0),
+  skippedCount: integer("skipped_count").notNull().default(0),
+  urgentCount: integer("urgent_count").notNull().default(0),
+  reviewCount: integer("review_count").notNull().default(0),
+  okCount: integer("ok_count").notNull().default(0),
+  /** Responses considered, after excluding integrity-flagged attempts. */
+  responseCount: integer("response_count").notNull().default(0),
+  minResponses: integer("min_responses").notNull(),
+  message: text("message"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * One item's statistics from one run.
+ *
+ * Kept per run rather than overwritten so the bank's history is legible: an
+ * item that was fine last term and is failing now is a different problem from
+ * one that never worked, and only a series can tell them apart.
+ */
+export const itemStatistics = pgTable(
+  "item_statistics",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => itemAnalysisRuns.id, { onDelete: "cascade" }),
+    questionId: uuid("question_id")
+      .notNull()
+      .references(() => questions.id, { onDelete: "cascade" }),
+    responses: integer("responses").notNull(),
+    /** Proportion answering correctly. Confusingly, a HIGH value means EASY. */
+    facility: numeric("facility", { precision: 6, scale: 4 }),
+    /** Corrected point-biserial: this item against the rest of the paper. */
+    discrimination: numeric("discrimination", { precision: 6, scale: 4 }),
+    discriminationP: numeric("discrimination_p", { precision: 8, scale: 6 }),
+    /** urgent | review | ok | not_analysed. */
+    verdict: text("verdict").notNull(),
+    flags: text("flags").array().notNull().default([]),
+    message: text("message").notNull(),
+    /** Per-option selection rates and chooser calibre, for MCQ items. */
+    distractors: jsonb("distractors"),
+  },
+  (t) => [
+    uniqueIndex("item_statistics_run_question_key").on(t.runId, t.questionId),
+    index("item_statistics_verdict_idx").on(t.runId, t.verdict),
+  ],
+);
+
 export const calibrationRuns = pgTable(
   "calibration_runs",
   {
