@@ -2,7 +2,7 @@ import { desc, eq } from "drizzle-orm";
 import { AppShell } from "@/components/app-shell";
 import { AccessDecisionForm } from "@/components/employer-forms";
 import { Alert, Card, Empty, SectionHeading } from "@/components/ui";
-import { requireStaff } from "@/lib/auth";
+import { requirePlacementStaff } from "@/lib/auth";
 import { withRequestContext } from "@/lib/db/client";
 import { employerAccessGrants, employers } from "@/lib/db/schema";
 
@@ -20,7 +20,7 @@ export default async function AdminEmployersPage({
   searchParams: Promise<{ decided?: string }>;
 }) {
   const { decided: decision } = await searchParams;
-  const user = await requireStaff();
+  const user = await requirePlacementStaff();
 
   const rows = await withRequestContext(user, (tx) =>
     tx

@@ -26,6 +26,7 @@ const ROLES: UserRole[] = [
 /** Which guard protects each landing page, expressed as "who may load it". */
 const ADMITS: Record<string, (role: UserRole) => boolean> = {
   "/dashboard": (role) => role === "student",
+  "/faculty": (role) => ["faculty", "admin", "super_admin"].includes(role),
   "/admin": (role) => ["faculty", "admin", "super_admin"].includes(role),
   "/employer": (role) => role === "employer",
 };
@@ -33,7 +34,8 @@ const ADMITS: Record<string, (role: UserRole) => boolean> = {
 describe("homeFor", () => {
   it("routes each role to its own area", () => {
     expect(homeFor("student")).toBe("/dashboard");
-    expect(homeFor("faculty")).toBe("/admin");
+    // A lecturer's home is their own classes, not the placement dashboard.
+    expect(homeFor("faculty")).toBe("/faculty");
     expect(homeFor("admin")).toBe("/admin");
     expect(homeFor("super_admin")).toBe("/admin");
     expect(homeFor("employer")).toBe("/employer");

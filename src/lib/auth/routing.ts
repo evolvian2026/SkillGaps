@@ -14,6 +14,10 @@ import { isStaff, type UserRole } from "./types";
  */
 export function homeFor(role: UserRole): string {
   if (role === "employer") return "/employer";
+  // A lecturer's home is their own classes, not the placement dashboard. The
+  // placement office keeps /admin, which faculty can still reach for the
+  // teaching-relevant pages.
+  if (role === "faculty") return "/faculty";
   if (isStaff(role)) return "/admin";
   return "/dashboard";
 }

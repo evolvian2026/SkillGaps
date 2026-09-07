@@ -2,7 +2,7 @@ import { asc, eq } from "drizzle-orm";
 import { AppShell } from "@/components/app-shell";
 import { OutcomeForm } from "@/components/readiness-forms";
 import { Alert, Card, Empty, SectionHeading } from "@/components/ui";
-import { requireStaff } from "@/lib/auth";
+import { requirePlacementStaff } from "@/lib/auth";
 import { withRequestContext } from "@/lib/db/client";
 import { placementOutcomes, studentProfiles, users } from "@/lib/db/schema";
 
@@ -31,7 +31,7 @@ export default async function OutcomesPage({
   searchParams: Promise<{ student?: string }>;
 }) {
   const { student } = await searchParams;
-  const user = await requireStaff();
+  const user = await requirePlacementStaff();
 
   const data = await withRequestContext(user, async (tx) => {
     const rows = await tx

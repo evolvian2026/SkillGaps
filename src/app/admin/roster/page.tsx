@@ -3,7 +3,7 @@ import { AppShell } from "@/components/app-shell";
 import { RosterImport } from "@/components/roster-import";
 import { RosterRowActions } from "@/components/roster-row-actions";
 import { Alert, Card, Empty, SectionHeading } from "@/components/ui";
-import { requireStaff } from "@/lib/auth";
+import { requirePlacementStaff } from "@/lib/auth";
 import { withRequestContext } from "@/lib/db/client";
 import { listRoster, summariseRoster, type RosterStatus } from "@/lib/roster/queries";
 
@@ -54,7 +54,7 @@ export default async function RosterPage({
   searchParams: Promise<{ status?: string; done?: string }>;
 }) {
   const { status, done } = await searchParams;
-  const user = await requireStaff();
+  const user = await requirePlacementStaff();
   const origin = await requestOrigin();
 
   const entries = await withRequestContext(user, (tx) => listRoster(tx));

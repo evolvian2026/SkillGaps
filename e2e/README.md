@@ -51,6 +51,7 @@ wrong state. Set `E2E_SKIP_SEED=1` to manage the database yourself.
 | `05-roster-journey.spec.ts` | Bulk roster onboarding: CSV preview with per-row outcomes, import, join links issued once, student redemption with their own password and consent, re-import idempotence, reissue and revoke, cross-tenant and role isolation |
 | `06-item-quality.spec.ts` | The item-quality report: reachable by the platform owner, invisible and unreachable to a TPO, a student, an employer and a stranger; says plainly when no analysis has been run |
 | `07-assessment-resilience.spec.ts` | The network cut mid-paper: the offline indicator, the answer held on the device, a submit that refuses to lose unsent work, recovery after a reload, and automatic flush when saving works again |
+| `08-faculty-journey.spec.ts` | The lecturer's view: their own subjects and sections, topics named against each area, gaps scoped to what they teach, and the placement-office pages they can neither see nor reach |
 
 ## Conventions
 

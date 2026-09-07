@@ -47,6 +47,35 @@ export async function requireStaff(): Promise<SessionUser> {
 }
 
 /**
+ * Placement-office surfaces: admin and super-admin, never faculty.
+ *
+ * `faculty` is inside `isStaff`, so before this existed a lecturer could
+ * approve an employer's access to the cohort, resolve a DPDP data request, or
+ * export every student's placement status. None of that is teaching, and none
+ * of it is a lecturer's to decide. They keep the pages that are about their
+ * students' learning and get `/faculty` as their home.
+ */
+export async function requirePlacementStaff(): Promise<SessionUser> {
+  const user = await requireUser();
+  if (user.role !== "admin" && user.role !== "super_admin") {
+    redirect(homeFor(user.role));
+  }
+  return user;
+}
+
+/**
+ * The faculty view.
+ *
+ * Open to the placement office too: an admin who also teaches should not need
+ * a second account, and they can already see everything it shows.
+ */
+export async function requireTeachingStaff(): Promise<SessionUser> {
+  const user = await requireUser();
+  if (!isStaff(user.role)) redirect(homeFor(user.role));
+  return user;
+}
+
+/**
  * Platform-owner surfaces: the question bank's own health.
  *
  * Narrower than `requireStaff` on purpose. Item statistics pool responses

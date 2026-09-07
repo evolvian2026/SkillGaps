@@ -2,7 +2,7 @@ import { desc, eq } from "drizzle-orm";
 import { AppShell } from "@/components/app-shell";
 import { ResolveRequestForm } from "@/components/resolve-request-form";
 import { Alert, Card, Empty, SectionHeading } from "@/components/ui";
-import { requireStaff } from "@/lib/auth";
+import { requirePlacementStaff } from "@/lib/auth";
 import { withRequestContext } from "@/lib/db/client";
 import { dataRequests, users } from "@/lib/db/schema";
 
@@ -28,7 +28,7 @@ export default async function RequestsPage({
   searchParams: Promise<{ resolved?: string }>;
 }) {
   const { resolved } = await searchParams;
-  const user = await requireStaff();
+  const user = await requirePlacementStaff();
 
   const rows = await withRequestContext(user, (tx) =>
     tx

@@ -29,6 +29,42 @@ function hashPassword(password: string): string {
 const DEMO_PASSWORD = "SkillGaps2026";
 
 const BRANCHES = ["CSE", "IT", "ECE", "AI & DS"];
+
+/**
+ * A demo syllabus for the faculty view.
+ *
+ * Deliberately uneven: Databases covers its area closely, while Problem
+ * Solving leaves real gaps and carries one topic the reference list has never
+ * heard of — so the lecturer's page has both kinds of finding to show.
+ */
+const DEMO_SUBJECTS = [
+  {
+    code: "CS301",
+    name: "Database Management Systems",
+    branch: "CSE",
+    section: "A",
+    semester: 5,
+    topics: [
+      "Joins and Subqueries",
+      "Aggregation and Grouping",
+      "Normalisation",
+      "Transactions and ACID",
+    ],
+  },
+  {
+    code: "CS302",
+    name: "Problem Solving and Data Structures",
+    branch: "CSE",
+    section: "A",
+    semester: 5,
+    topics: [
+      "Arrays and Strings",
+      "Recursion",
+      "Sorting and Searching",
+      "Departmental Mini Project",
+    ],
+  },
+];
 const SECTIONS = ["A", "B"];
 const BATCH_YEARS = [2026, 2027];
 
@@ -388,6 +424,49 @@ async function main() {
         );
       }
 
+      // A lecturer, with a syllabus and the sections they teach it to, so the
+      // faculty view has something real to show out of the box.
+      const { rows: facultyRows } = await client.query<{ id: string }>(
+        `INSERT INTO users (tenant_id, email, full_name, role, password_hash)
+         VALUES ($1,$2,$3,'faculty',$4) RETURNING id`,
+        [
+          tenantId,
+          `faculty@${tenant.domains[0]}`,
+          `Lecturer — ${tenant.name}`,
+          passwordHash,
+        ],
+      );
+      const facultyId = facultyRows[0].id;
+
+      for (const subject of DEMO_SUBJECTS) {
+        const { rows: subjectRows } = await client.query<{ id: string }>(
+          `INSERT INTO syllabus_subjects
+             (tenant_id, code, name, branch, semester, topics)
+           VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+          [
+            tenantId,
+            subject.code,
+            subject.name,
+            subject.branch,
+            subject.semester,
+            subject.topics,
+          ],
+        );
+        await client.query(
+          `INSERT INTO teaching_assignments
+             (tenant_id, subject_id, faculty_id, branch, section, batch_year)
+           VALUES ($1,$2,$3,$4,$5,$6)`,
+          [
+            tenantId,
+            subjectRows[0].id,
+            facultyId,
+            subject.branch,
+            subject.section,
+            null,
+          ],
+        );
+      }
+
       const rng = makeRng(1000 + tenantIndex * 97);
       for (let i = 0; i < tenant.studentCount; i++) {
         const first = FIRST_NAMES[Math.floor(rng() * FIRST_NAMES.length)];
@@ -473,6 +552,7 @@ async function main() {
     console.log(`  password: ${DEMO_PASSWORD}`);
     console.log("  TPO:      tpo@sunrise.edu.in / tpo@meridian.ac.in");
   console.log("  Owner:    root@sunrise.edu.in (super-admin; item quality)");
+  console.log("  Faculty:  faculty@sunrise.edu.in (teaches CSE section A)");
     console.log("  Employer: recruiter@northwind.example (access request pending)");
     console.log("  Student: any seeded student address, e.g. run");
     console.log("           psql -c \"SELECT email FROM users WHERE role='student' LIMIT 3\"");

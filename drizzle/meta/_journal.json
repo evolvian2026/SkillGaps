@@ -43,6 +43,13 @@
       "when": 1788764708044,
       "tag": "0005_nebulous_agent_brand",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788768484285,
+      "tag": "0006_long_echo",
+      "breakpoints": true
     }
   ]
 }

@@ -9,6 +9,8 @@ export const ACCOUNTS = {
   employer: "recruiter@northwind.example",
   /** Platform owner: the only role that may read item statistics. */
   superAdmin: "root@sunrise.edu.in",
+  /** A lecturer, assigned two seeded subjects for CSE section A. */
+  faculty: "faculty@sunrise.edu.in",
 } as const;
 
 /** A unique address per run, so tests never collide with earlier runs. */

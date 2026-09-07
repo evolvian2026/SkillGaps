@@ -57,6 +57,7 @@ Password for every seeded account: `SkillGaps2026`
 | TPO / admin | `tpo@sunrise.edu.in` |
 | TPO / admin | `tpo@meridian.ac.in` |
 | Platform owner | `root@sunrise.edu.in` — super-admin; the only role that can open `/admin/items` |
+| Faculty | `faculty@sunrise.edu.in` — teaches two seeded subjects to CSE section A |
 | Employer | `recruiter@northwind.example` — starts with a **pending** access request, so approving it is part of the demo |
 | Student | any seeded student address — `psql -d skillgaps -c "SELECT email FROM users WHERE role='student' LIMIT 5"` |
 
@@ -122,6 +123,7 @@ so no policy changes.
 | `users` | `role`: student / faculty / admin / employer / super_admin. Employer is declared now so Phase 3 extends this model rather than building a parallel one. |
 | `student_profiles` | Branch, section, batch year, roll number — what the dashboard filters on. |
 | `sessions` | Server-side sessions for `AUTH_PROVIDER=local`. Stores a SHA-256 of the cookie token, never the token. |
+| `teaching_assignments` | Who teaches which subject to which section. Written by the placement office only — a lecturer who could write here could read any section in the institution. |
 | `roster_invitations` | A bulk import creates these, not accounts — consent has to be the student's own act. Unique on (tenant, email) so a re-import updates rather than duplicates. Stores a SHA-256 of the join token, never the token. |
 
 ### Shared taxonomy (global, not tenant-scoped)
@@ -302,7 +304,7 @@ tabs, and treating that as cheating would be both wrong and unfair.
 |---|---|---|
 | Unit + RLS | `npm test` | Scoring, matching, curriculum comparison, evaluation, calibration guards, and tenant isolation on every table, against a real database |
 | Python | `cd services/parser && pytest` | Text extraction, skill matching, and the calibration and item-analysis statistics including every refusal path |
-| End-to-end | `npm run test:e2e` | The whole product in a browser: seven journeys plus security probes. See `e2e/README.md` |
+| End-to-end | `npm run test:e2e` | The whole product in a browser: eight journeys plus security probes. See `e2e/README.md` |
 | Everything | `npm run test:all` | Unit then end-to-end |
 
 The end-to-end suite needs the full system running — database, Redis, worker,
@@ -383,6 +385,63 @@ Details worth knowing:
 `tests/rls-roster.test.ts` asserts the isolation and single-use properties
 against a real database; `tests/roster-csv.test.ts` covers the messy-file
 behaviour; `e2e/05-roster-journey.spec.ts` drives the whole flow in a browser.
+
+## The faculty view
+
+`faculty` was a staff role with no teaching attached, so a lecturer signed in
+and got the placement office's dashboard: cohort-wide, placement-shaped, and
+silent about the subject they actually teach. They could also approve an
+employer's access, resolve a DPDP data request, and export every student's
+placement status — none of which is teaching, and none of which is a
+lecturer's to decide.
+
+`/faculty` is now their home. For each subject they teach, it answers the
+question a syllabus can act on: **of the things I teach, which is this class
+weakest at, and what does my syllabus not cover?**
+
+| What it shows | Why |
+|---|---|
+| Skill areas *this subject* teaches, weakest first | Mapped from the subject's own topic list, so a DBMS lecturer is never handed responsibility for another area |
+| The lecturer's own topics against each area | A skill area code alone does not tell them which lecture to change |
+| In-demand topics the syllabus misses | Only inside areas the subject already teaches — the rest would bury what they can act on |
+| Syllabus topics the reference list does not recognise | Framed as a gap in the benchmark, not a fault in the teaching |
+
+Three things it deliberately refuses to do:
+
+- **It never names a student.** A class-level pattern is what a syllabus can
+  answer; a name is the placement office's to act on. This is narrower than the
+  TPO's view on purpose.
+- **It will not read a pattern from a handful of students.** Below eight
+  assessed it says so and stops, rather than presenting noise as a finding.
+- **It does not invent a threshold.** Where a class spans tracks that set
+  different hiring bars there is nothing to be "below", so it reports the
+  average and says why. Every bar it does compare against is labelled
+  provisional, like everywhere else.
+
+### Teaching assignments, and why the lecturer cannot write them
+
+A lecturer sees a class because the **placement office** said they teach it
+(`/admin/teaching`). If faculty could write `teaching_assignments` they could
+assign themselves any section in the institution and read its results, which
+would turn the whole feature into a self-service tenancy hole. So writes are
+`admin`/`super_admin` only, enforced twice — by `requirePlacementStaff` in the
+action and independently by the RLS policy, which additionally refuses an
+assignment naming a lecturer or a subject from another institution.
+
+### What faculty kept, and what they lost
+
+| Page | Faculty |
+|---|---|
+| `/faculty`, `/admin`, `/admin/students`, `/admin/curriculum`, `/admin/validation` | Kept — their students' learning |
+| `/admin/teaching`, `/admin/roster`, `/admin/outcomes`, `/admin/employers`, `/admin/requests`, `/admin/settings`, the cohort CSV export | Placement office only |
+
+This narrowing goes slightly beyond "add a faculty page", and it is deliberate:
+adding a focused view while leaving a lecturer able to grant employers access to
+the cohort would not have fixed the problem.
+
+`tests/rls-teaching.test.ts` proves the database refuses a lecturer writing an
+assignment; `e2e/08-faculty-journey.spec.ts` proves the application never
+offers it.
 
 ## Employers: what a grant does and does not buy
 
@@ -726,6 +785,9 @@ environment.
   same table without a schema change.
 - Student table sorting happens in the page, not in SQL. Fine at a few hundred
   students per tenant; revisit if a tenant gets much larger.
+- The faculty view reports on a lecturer's assigned cohort as a whole. It has
+  no per-student drill-down by design, which means a lecturer who wants to know
+  *who* is struggling still has to ask the placement office.
 - Item analysis is a maintenance report, not an automated fix: it names the
   items to look at and never edits, retires or re-keys anything. That is
   deliberate — an editorial decision about a question bank should be made by a

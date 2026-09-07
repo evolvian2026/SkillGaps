@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSessionUser, isStaff } from "@/lib/auth";
+import { getSessionUser } from "@/lib/auth";
 import { withRequestContext } from "@/lib/db/client";
 import { loadStudentRows } from "@/lib/admin/cohort";
 import { parseCohortFilters } from "@/lib/admin/filters";
@@ -24,7 +24,10 @@ function csvField(value: unknown): string {
 
 export async function GET(request: Request) {
   const user = await getSessionUser();
-  if (!user || !isStaff(user.role)) {
+  // The placement office only. This export carries every student's placement
+  // status and readiness score, which is the office's business and not a
+  // lecturer's — they get their own classes' gaps on /faculty instead.
+  if (!user || (user.role !== "admin" && user.role !== "super_admin")) {
     return NextResponse.json({ error: "Not authorised" }, { status: 403 });
   }
 

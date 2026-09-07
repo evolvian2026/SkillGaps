@@ -27,6 +27,8 @@ export function AppShell({
   // employer too, or it offers them a row of links that each bounce straight
   // back to /employer.
   const employer = user.role === "employer";
+  // Faculty are staff, but the placement-office pages are not theirs.
+  const placementStaff = user.role === "admin" || user.role === "super_admin";
   return (
     <div className="min-h-screen">
       <header className="border-b border-ink-200 bg-white">
@@ -45,17 +47,26 @@ export function AppShell({
               </>
             ) : staff ? (
               <>
+                {/* A lecturer's own classes come first; the placement-office
+                    pages below are hidden from them entirely, because their
+                    guards would only bounce them back here. */}
+                <NavLink href="/faculty" label="My classes" />
                 <NavLink href="/admin" label="Cohort" />
                 <NavLink href="/admin/students" label="Students" />
-                <NavLink href="/admin/roster" label="Roster" />
                 <NavLink href="/admin/curriculum" label="Curriculum" />
-                <NavLink href="/admin/outcomes" label="Outcomes" />
-                <NavLink href="/admin/employers" label="Employers" />
                 <NavLink href="/admin/validation" label="Evidence" />
+                {placementStaff ? (
+                  <>
+                    <NavLink href="/admin/teaching" label="Teaching" />
+                    <NavLink href="/admin/roster" label="Roster" />
+                    <NavLink href="/admin/outcomes" label="Outcomes" />
+                    <NavLink href="/admin/employers" label="Employers" />
+                    <NavLink href="/admin/requests" label="Data requests" />
+                  </>
+                ) : null}
                 {user.role === "super_admin" ? (
                   <NavLink href="/admin/items" label="Item quality" />
                 ) : null}
-                <NavLink href="/admin/requests" label="Data requests" />
               </>
             ) : (
               <>

@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { AppShell } from "@/components/app-shell";
 import { WeightsForm } from "@/components/readiness-forms";
 import { Alert, Card, SectionHeading } from "@/components/ui";
-import { requireStaff } from "@/lib/auth";
+import { requirePlacementStaff } from "@/lib/auth";
 import { withRequestContext } from "@/lib/db/client";
 import { readinessWeights } from "@/lib/db/schema";
 import { DEFAULT_WEIGHTS } from "@/lib/readiness/score";
@@ -11,7 +11,7 @@ export const metadata = { title: "Readiness settings" };
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
-  const user = await requireStaff();
+  const user = await requirePlacementStaff();
 
   const current = await withRequestContext(user, async (tx) => {
     const [row] = await tx

@@ -218,6 +218,53 @@ export const rosterInvitations = pgTable(
   ],
 );
 
+/**
+ * Who teaches what, to whom.
+ *
+ * The faculty view needs to know a lecturer's own sections, and there was no
+ * way to express that: `faculty` was a staff role with no teaching attached, so
+ * every lecturer saw the whole institution's placement dashboard and nothing
+ * about their own class.
+ *
+ * Assignments are written by the placement office, never by the lecturer. A
+ * faculty member who could assign themselves a cohort could grant themselves
+ * visibility of any section in the institution, which is exactly the thing this
+ * table has to make impossible — so the RLS admits `admin` and `super_admin`
+ * for writes and all staff for reads.
+ */
+export const teachingAssignments = pgTable(
+  "teaching_assignments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    subjectId: uuid("subject_id")
+      .notNull()
+      .references(() => syllabusSubjects.id, { onDelete: "cascade" }),
+    facultyId: uuid("faculty_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /**
+     * The cohort taught. Null means "every value" — a lecturer taking all
+     * sections of a branch should not need one row per section.
+     */
+    branch: text("branch"),
+    section: text("section"),
+    batchYear: integer("batch_year"),
+    createdBy: uuid("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("teaching_assignments_faculty_idx").on(t.tenantId, t.facultyId),
+    index("teaching_assignments_subject_idx").on(t.subjectId),
+  ],
+);
+
 /** Server-side sessions. Only used when AUTH_PROVIDER=local. */
 export const sessions = pgTable(
   "sessions",
