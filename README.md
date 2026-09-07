@@ -284,7 +284,11 @@ blocks — a student on a flaky hostel connection looks identical to one switchi
 tabs, and treating that as cheating would be both wrong and unfair.
 
 - Question **selection** is randomised per attempt and spread across difficulty
-  levels, so scores stay comparable between students.
+  levels, so scores stay comparable between students. Randomisation is only real
+  if the pool is deeper than the quota — when they are equal, every student sits
+  an identical section and a retake asks the same questions. Every blueprint
+  quota now has at least 2.5x depth, and `tests/question-bank.test.ts` fails if
+  a future quota or bank change erodes that.
 - Question **order** and MCQ **option order** are randomised per attempt, so a
   shared answer key ("it's the third one") does not transfer.
 - The paper is frozen at `attempt_questions` on creation.
@@ -443,26 +447,33 @@ than their own progress.
 ### What the seeded bank can and cannot serve
 
 **98 practice items across 9 skill areas** — 10 to 12 each, spread over all
-three difficulty levels — and 4–7 diagnostic multiple-choice items per area.
+three difficulty levels — and 6–18 diagnostic multiple-choice items per area.
 That is enough for practice everywhere, with room for a student to practise an
-area repeatedly before repeating a question, and enough for a check in the
-better-covered areas only.
+area repeatedly before repeating a question, and enough for a skill check in
+every area.
 
 The draw prefers questions the student has not seen in that area and spreads
 them across difficulty, falling back to already-seen items only once the area
 runs dry — which is a signal to grow the bank, not a reason to fail.
 
-The report offers each button **only where the bank can serve it**, and says so
-plainly where it cannot — a button that can only fail is worse than no button.
+The report still offers each button **only where the bank can serve it**, and
+says so plainly where it cannot — a button that can only fail is worse than no
+button, and a shrinking bank would bring that case back.
 Item analysis (`/admin/items`) is how you tell which items are worth keeping as
 the bank grows.
 
-`tests/practice-bank.test.ts` guards the content itself: exactly one correct
-option per item, no duplicate prompts, an explanation on every question, and
-enough items per area to serve more than one distinct session. Hand-authored
-content at this volume is exactly where a slip hides, and an item with two
-correct answers teaches a student something false with no way for them to
-tell.
+`tests/practice-bank.test.ts` and `tests/question-bank.test.ts` guard the
+content itself: exactly one correct option per item, at least three options, no
+duplicate prompts, an explanation on every practice question, accepted answers
+on every short-answer item and test cases on every code item — plus the
+blueprint-depth and skill-check-floor invariants above, and a check that **no
+prompt appears in both pools**, since a shared prompt would hand a student the
+key to a question they are later graded on.
+
+Hand-authored content at this volume is exactly where a slip hides. In practice
+a wrong key teaches a student something false; in a diagnostic it silently
+corrupts their report, their cohort's averages, the employer pools and the item
+statistics, with nothing on any screen to reveal it.
 
 `tests/practice-progress.test.ts` covers the claim rules, `tests/rls-practice.test.ts`
 proves the pool separation and per-student privacy against a real database, and
@@ -871,10 +882,10 @@ environment.
   unseen questions first, but a determined student can still work through an
   area in two or three sessions, after which it repeats. It degrades gracefully
   rather than failing, but a real cohort will want more.
-- Several skill areas cannot support a skill check on the seeded bank (a check
-  needs at least 5 diagnostic multiple-choice items in one area). The report
-  hides the button where that is true rather than failing, but the honest fix
-  is more questions.
+- The bank is still a starter bank. 115 diagnostic items give every blueprint
+  quota at least 2.5x depth, which is enough that papers vary and a retake
+  differs — but a heavily used cohort will want more, and item analysis is how
+  you decide which of these to keep.
 - The faculty view reports on a lecturer's assigned cohort as a whole. It has
   no per-student drill-down by design, which means a lecturer who wants to know
   *who* is struggling still has to ask the placement office.
