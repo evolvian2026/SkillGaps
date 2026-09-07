@@ -52,6 +52,7 @@ wrong state. Set `E2E_SKIP_SEED=1` to manage the database yourself.
 | `06-item-quality.spec.ts` | The item-quality report: reachable by the platform owner, invisible and unreachable to a TPO, a student, an employer and a stranger; says plainly when no analysis has been run |
 | `07-assessment-resilience.spec.ts` | The network cut mid-paper: the offline indicator, the answer held on the device, a submit that refuses to lose unsent work, recovery after a reload, and automatic flush when saving works again |
 | `08-faculty-journey.spec.ts` | The lecturer's view: their own subjects and sections, topics named against each area, gaps scoped to what they teach, and the placement-office pages they can neither see nor reach |
+| `09-practice-loop.spec.ts` | Gap → practice → re-prove: acting on a gap from the report, practice withholding its answer until committed then explaining it, a check that reveals nothing as you go, the cooldown, and the refusal to call a small move an improvement |
 
 ## Conventions
 

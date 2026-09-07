@@ -3,6 +3,7 @@ import { Client } from "pg";
 import { migrationUrl } from "./_bootstrap";
 import { SKILL_AREAS, TRACKS, BENCHMARKS } from "./seed-data/taxonomy";
 import { QUESTIONS } from "./seed-data/questions";
+import { PRACTICE_QUESTIONS } from "./seed-data/practice";
 import { RESOURCES } from "./seed-data/resources";
 import { INTERVIEW_QUESTIONS } from "./seed-data/interview";
 import { INDUSTRY_SKILLS } from "./seed-data/industry";
@@ -341,6 +342,32 @@ async function main() {
     }
 
     // ------------------------------------------ interview question bank --
+    // Practice items. Never linked to a track, so they can never be drawn
+    // into a diagnostic paper — a database trigger refuses that too, because
+    // practice shows the answer and a leaked item would be an answer key.
+    for (const question of PRACTICE_QUESTIONS) {
+      const id = randomUUID();
+      await client.query(
+        `INSERT INTO questions
+           (id, skill_area_id, type, pool, prompt, difficulty, points, explanation)
+         VALUES ($1,$2,'mcq','practice',$3,$4,1,$5)`,
+        [
+          id,
+          skillAreaIds.get(question.skillArea),
+          question.prompt,
+          question.difficulty,
+          question.explanation,
+        ],
+      );
+      for (const [index, option] of question.options.entries()) {
+        await client.query(
+          `INSERT INTO question_options (question_id, label, is_correct, display_order)
+           VALUES ($1,$2,$3,$4)`,
+          [id, option.label, option.correct ?? false, index * 10],
+        );
+      }
+    }
+
     for (const question of INTERVIEW_QUESTIONS) {
       const { rows } = await client.query<{ id: string }>(
         `INSERT INTO interview_questions
@@ -543,6 +570,7 @@ async function main() {
     console.log(`  skill areas: ${SKILL_AREAS.length}`);
     console.log(`  tracks: ${TRACKS.length}`);
     console.log(`  questions: ${QUESTIONS.length}`);
+    console.log(`  practice questions: ${PRACTICE_QUESTIONS.length}`);
     console.log(`  tenants: ${demoTenants.length}`);
     console.log(`  interview questions: ${INTERVIEW_QUESTIONS.length}`);
     console.log(`  industry reference topics: ${INDUSTRY_SKILLS.length}`);

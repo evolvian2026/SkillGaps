@@ -1,12 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { Card, Empty, ProvisionalBadge, SectionHeading } from "@/components/ui";
 import { AppShell } from "@/components/app-shell";
 import { SkillGapChart, TrendChart } from "@/components/lazy-charts";
+import { GapLoopActions } from "@/components/gap-loop-actions";
+import { MIN_CHECK_LENGTH } from "@/lib/practice/progress";
 import { requireUser } from "@/lib/auth";
 import { withRequestContext } from "@/lib/db/client";
-import { attempts } from "@/lib/db/schema";
+import { attempts, questions } from "@/lib/db/schema";
 import { loadAttemptReport, loadTrend } from "@/lib/assessment/report";
 
 export const metadata = { title: "Your skill-gap report" };
@@ -52,11 +54,38 @@ export default async function ReportPage({
       .from(attempts)
       .where(eq(attempts.id, attemptId));
     const trend = row ? await loadTrend(tx, row.userId, row.trackId) : [];
-    return { report, trend, trackId: row?.trackId ?? null };
+    // Which areas the bank can actually serve, so the report never offers a
+    // button that can only fail. Practice needs a practice set; a check needs
+    // enough diagnostic multiple-choice items to be worth scoring.
+    const counts = await tx
+      .select({
+        skillAreaId: questions.skillAreaId,
+        practice: sql<number>`COUNT(*) FILTER (WHERE ${questions.pool} = 'practice')::int`,
+        checkable: sql<number>`COUNT(*) FILTER (
+          WHERE ${questions.pool} = 'diagnostic' AND ${questions.type} = 'mcq'
+        )::int`,
+      })
+      .from(questions)
+      .where(eq(questions.isActive, true))
+      .groupBy(questions.skillAreaId);
+
+    return {
+      report,
+      trend,
+      trackId: row?.trackId ?? null,
+      practiceAreas: new Set(
+        counts.filter((c) => c.practice > 0).map((c) => c.skillAreaId),
+      ),
+      checkableAreas: new Set(
+        counts
+          .filter((c) => c.checkable >= MIN_CHECK_LENGTH)
+          .map((c) => c.skillAreaId),
+      ),
+    };
   });
 
   if (!data) notFound();
-  const { report, trend } = data;
+  const { report, trend, practiceAreas, checkableAreas } = data;
 
   const flags = Object.entries(report.integrityFlags).filter(([, n]) => n > 0);
 
@@ -185,6 +214,11 @@ export default async function ReportPage({
                     </li>
                   ) : null}
                 </ul>
+                <GapLoopActions
+                  skillAreaId={area.skillAreaId}
+                  hasPractice={practiceAreas.has(area.skillAreaId)}
+                  canCheck={checkableAreas.has(area.skillAreaId)}
+                />
               </Card>
             ))}
           </div>

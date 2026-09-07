@@ -123,6 +123,8 @@ so no policy changes.
 | `users` | `role`: student / faculty / admin / employer / super_admin. Employer is declared now so Phase 3 extends this model rather than building a parallel one. |
 | `student_profiles` | Branch, section, batch year, roll number — what the dashboard filters on. |
 | `sessions` | Server-side sessions for `AUTH_PROVIDER=local`. Stores a SHA-256 of the cookie token, never the token. |
+| `practice_sessions`, `practice_responses` | Untimed practice on one skill area, drawn from the practice pool only. Feeds no score anywhere. |
+| `skill_checks`, `skill_check_questions` | Short scored re-checks. Deliberately not `attempts` rows — the cohort dashboard, employer pools and item analysis all read `attempts`, and a focused check is not comparable to a full paper. |
 | `teaching_assignments` | Who teaches which subject to which section. Written by the placement office only — a lecturer who could write here could read any section in the institution. |
 | `roster_invitations` | A bulk import creates these, not accounts — consent has to be the student's own act. Unique on (tenant, email) so a re-import updates rather than duplicates. Stores a SHA-256 of the join token, never the token. |
 
@@ -304,7 +306,7 @@ tabs, and treating that as cheating would be both wrong and unfair.
 |---|---|---|
 | Unit + RLS | `npm test` | Scoring, matching, curriculum comparison, evaluation, calibration guards, and tenant isolation on every table, against a real database |
 | Python | `cd services/parser && pytest` | Text extraction, skill matching, and the calibration and item-analysis statistics including every refusal path |
-| End-to-end | `npm run test:e2e` | The whole product in a browser: eight journeys plus security probes. See `e2e/README.md` |
+| End-to-end | `npm run test:e2e` | The whole product in a browser: nine journeys plus security probes. See `e2e/README.md` |
 | Everything | `npm run test:all` | Unit then end-to-end |
 
 The end-to-end suite needs the full system running — database, Redis, worker,
@@ -385,6 +387,71 @@ Details worth knowing:
 `tests/rls-roster.test.ts` asserts the isolation and single-use properties
 against a real database; `tests/roster-csv.test.ts` covers the messy-file
 behaviour; `e2e/05-roster-journey.spec.ts` drives the whole flow in a browser.
+
+## The gap → practice → re-prove loop
+
+The product diagnosed a gap, listed some curated resources, and then had
+nothing to offer but "retake the whole paper". A diagnostic that does not drive
+improvement is a report card. Every gap on a report now carries two ways out:
+
+| | Practice | Skill check |
+|---|---|---|
+| Question pool | **Practice only** — separate content | Diagnostic items in that one area |
+| Feedback | Answer and explanation, immediately | Nothing until you submit |
+| Scored into | Nothing at all | Nothing at all — a personal signal |
+| Length | 6 questions | Up to 8, at least 5 |
+| Repeatable | Freely | Once per area per 12 hours |
+
+### The rule the whole thing rests on
+
+**A practice item is never a diagnostic item.** Practice shows the correct
+answer and an explanation the moment a student commits; if the same question
+could appear on a diagnostic, practice would be an answer key, and every
+diagnostic score, cohort average, employer pool and item statistic in the
+product would be worthless.
+
+`questions.pool` separates them permanently, and a database trigger refuses to
+attach a practice question to a track — which is the one link through which a
+practice item could otherwise reach a graded paper. It refuses the owner role
+too, so a future seed or admin tool cannot quietly reintroduce the leak.
+
+### Why a check will often say "I can't tell"
+
+A check is a handful of binary questions, so one lucky guess is worth twelve to
+twenty points. Telling a student they improved on that evidence would be the
+most believable lie this product could tell.
+
+So the margin required to claim a change is derived from the check's actual
+length — roughly two standard errors, `100/√n`:
+
+| Check length | Move needed to claim a change |
+|---|---|
+| 5 questions | 45 points |
+| 8 questions | 35 points |
+| 12 questions | 29 points |
+
+Below that it says the check is too short to tell the move apart from luck, and
+names the measurement rather than the student as the limit. A check also never
+feeds the readiness score, the cohort figures, the employer pools or the item
+analysis — the full diagnostic remains the only thing that counts, and the UI
+says so on every screen.
+
+The cooldown is the other half of that honesty: without it a student can
+re-check until a lucky run, which measures the question bank's exposure rather
+than their own progress.
+
+### What the seeded bank can and cannot serve
+
+30 practice items across 9 skill areas, and 4–7 diagnostic multiple-choice
+items per area. That is enough for practice everywhere and for a check in the
+better-covered areas only. The report offers each button **only where the bank
+can serve it**, and says so plainly where it cannot — a button that can only
+fail is worse than no button. Growing the bank is the fix, and item analysis
+(`/admin/items`) is how you tell which items are worth keeping.
+
+`tests/practice-progress.test.ts` covers the claim rules, `tests/rls-practice.test.ts`
+proves the pool separation and per-student privacy against a real database, and
+`e2e/09-practice-loop.spec.ts` walks the loop in a browser.
 
 ## The faculty view
 
@@ -785,6 +852,13 @@ environment.
   same table without a schema change.
 - Student table sorting happens in the page, not in SQL. Fine at a few hundred
   students per tenant; revisit if a tenant gets much larger.
+- The practice bank is small — 30 items over 9 areas — so a student who
+  practises an area repeatedly will exhaust it. It needs to grow before a real
+  cohort uses it in anger.
+- Several skill areas cannot support a skill check on the seeded bank (a check
+  needs at least 5 diagnostic multiple-choice items in one area). The report
+  hides the button where that is true rather than failing, but the honest fix
+  is more questions.
 - The faculty view reports on a lecturer's assigned cohort as a whole. It has
   no per-student drill-down by design, which means a lecturer who wants to know
   *who* is struggling still has to ask the placement office.

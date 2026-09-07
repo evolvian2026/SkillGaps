@@ -4,6 +4,7 @@ import { AppShell } from "@/components/app-shell";
 import { Alert, Button, Card, Empty, SectionHeading } from "@/components/ui";
 import { requireStudent } from "@/lib/auth";
 import { withRequestContext } from "@/lib/db/client";
+import { recentChecks } from "@/lib/practice/queries";
 import { attempts, tracks } from "@/lib/db/schema";
 import { startAttemptAction } from "@/lib/assessment/actions";
 import { openEmployerAssessments } from "@/lib/employer/queries";
@@ -37,6 +38,7 @@ export default async function DashboardPage({
       .where(eq(tracks.isActive, true))
       .orderBy(tracks.displayOrder);
 
+    const checks = await recentChecks(tx, user.userId);
     const history = await tx
       .select({
         id: attempts.id,
@@ -71,6 +73,7 @@ export default async function DashboardPage({
       availableTracks,
       history,
       inProgress,
+      checks,
       // Employer drives open to this student's cohort. RLS hides any whose
       // employer lacks an active grant on their institution.
       employerAssessments: await openEmployerAssessments(tx),
@@ -177,6 +180,58 @@ export default async function DashboardPage({
           );
         })}
       </div>
+
+      {data.checks.length > 0 ? (
+        <>
+          <SectionHeading
+            title="Your skill checks"
+            hint="Short, focused re-checks. A personal progress signal only — they do not change your report or your readiness score."
+          />
+          <Card className="mb-8 overflow-x-auto p-0">
+            <table className="w-full min-w-[520px] text-sm">
+              <thead>
+                <tr className="border-b border-ink-200 text-left text-xs uppercase tracking-wide text-ink-400">
+                  <th className="px-5 py-3 font-medium">Area</th>
+                  <th className="px-5 py-3 font-medium">Taken</th>
+                  <th className="px-5 py-3 text-right font-medium">Diagnostic</th>
+                  <th className="px-5 py-3 text-right font-medium">Check</th>
+                  <th className="px-5 py-3" />
+                </tr>
+              </thead>
+              <tbody>
+                {data.checks.map((check) => (
+                  <tr key={check.id} className="border-b border-ink-100 last:border-0">
+                    <td className="px-5 py-3 font-medium text-ink-800">
+                      {check.areaName}
+                    </td>
+                    <td className="px-5 py-3 text-ink-600">
+                      {check.completedAt
+                        ? check.completedAt.toLocaleDateString("en-IN", {
+                            dateStyle: "medium",
+                          })
+                        : "In progress"}
+                    </td>
+                    <td className="px-5 py-3 text-right tabular-nums text-ink-600">
+                      {check.baselinePercent === null ? "—" : `${check.baselinePercent}%`}
+                    </td>
+                    <td className="px-5 py-3 text-right tabular-nums">
+                      {check.percent === null ? "—" : `${check.percent}%`}
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      <Link
+                        href={`/check/${check.id}`}
+                        className="text-sm font-medium text-brand-600 hover:underline"
+                      >
+                        {check.completedAt ? "View" : "Continue"}
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        </>
+      ) : null}
 
       <SectionHeading title="Your attempts" />
       {data.history.length === 0 ? (

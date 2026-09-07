@@ -27,6 +27,20 @@ export const userRoleEnum = pgEnum("user_role", [
   "super_admin",
 ]);
 
+/**
+ * Which pool a question belongs to.
+ *
+ * The two never mix, and that is the whole reason this column exists. Practice
+ * shows the correct answer and an explanation; if a practice item could also
+ * appear in a diagnostic, practice would be an answer key. Every diagnostic
+ * score, every cohort average, every employer pool and the item statistics all
+ * rest on diagnostic answers never having been shown to the student.
+ */
+export const questionPoolEnum = pgEnum("question_pool", [
+  "diagnostic",
+  "practice",
+]);
+
 export const questionTypeEnum = pgEnum("question_type", [
   "mcq",
   "short",
@@ -265,6 +279,139 @@ export const teachingAssignments = pgTable(
   ],
 );
 
+/**
+ * A practice run on one skill area.
+ *
+ * Untimed, unflagged, and scored for the student's own benefit only: it feeds
+ * no readiness score, no cohort average and no employer pool. Practice exists
+ * to close the loop between "you have a gap here" and "prove you fixed it",
+ * and a practice score that counted for anything would immediately become
+ * something to game.
+ */
+export const practiceSessions = pgTable(
+  "practice_sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    skillAreaId: uuid("skill_area_id")
+      .notNull()
+      .references(() => skillAreas.id, { onDelete: "restrict" }),
+    correctCount: integer("correct_count").notNull().default(0),
+    totalCount: integer("total_count").notNull().default(0),
+    startedAt: timestamp("started_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("practice_sessions_user_idx").on(t.userId, t.skillAreaId),
+    index("practice_sessions_tenant_idx").on(t.tenantId),
+  ],
+);
+
+export const practiceResponses = pgTable(
+  "practice_responses",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => practiceSessions.id, { onDelete: "cascade" }),
+    questionId: uuid("question_id")
+      .notNull()
+      .references(() => questions.id, { onDelete: "restrict" }),
+    position: integer("position").notNull(),
+    selectedOptionId: uuid("selected_option_id").references(
+      () => questionOptions.id,
+      { onDelete: "set null" },
+    ),
+    isCorrect: boolean("is_correct"),
+    answeredAt: timestamp("answered_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("practice_responses_position_key").on(t.sessionId, t.position),
+    index("practice_responses_session_idx").on(t.sessionId),
+  ],
+);
+
+/**
+ * A short, scored re-check on one skill area — the "prove you fixed it" half
+ * of the loop.
+ *
+ * Deliberately NOT an `attempts` row. A check is eight questions on one area,
+ * taken by a student who knows exactly what is coming; counting it as an
+ * attempt would corrupt every cohort average, the employer pools and the item
+ * statistics, all of which read `attempts`. It is a personal progress signal
+ * and nothing else, which is what the UI says.
+ */
+export const skillChecks = pgTable(
+  "skill_checks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    skillAreaId: uuid("skill_area_id")
+      .notNull()
+      .references(() => skillAreas.id, { onDelete: "restrict" }),
+    /** The diagnostic score this check is measured against, frozen at start. */
+    baselinePercent: numeric("baseline_percent", { precision: 5, scale: 2 }),
+    percent: numeric("percent", { precision: 5, scale: 2 }),
+    correctCount: integer("correct_count").notNull().default(0),
+    totalCount: integer("total_count").notNull().default(0),
+    startedAt: timestamp("started_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("skill_checks_user_idx").on(t.userId, t.skillAreaId),
+    index("skill_checks_tenant_idx").on(t.tenantId),
+  ],
+);
+
+/**
+ * The frozen question set for one check.
+ *
+ * Materialised up front for the same reason a diagnostic paper is: a reload
+ * must not be able to reshuffle into an easier set.
+ */
+export const skillCheckQuestions = pgTable(
+  "skill_check_questions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    checkId: uuid("check_id")
+      .notNull()
+      .references(() => skillChecks.id, { onDelete: "cascade" }),
+    questionId: uuid("question_id")
+      .notNull()
+      .references(() => questions.id, { onDelete: "restrict" }),
+    position: integer("position").notNull(),
+    selectedOptionId: uuid("selected_option_id").references(
+      () => questionOptions.id,
+      { onDelete: "set null" },
+    ),
+    isCorrect: boolean("is_correct"),
+  },
+  (t) => [
+    uniqueIndex("skill_check_questions_position_key").on(t.checkId, t.position),
+    index("skill_check_questions_check_idx").on(t.checkId),
+  ],
+);
+
 /** Server-side sessions. Only used when AUTH_PROVIDER=local. */
 export const sessions = pgTable(
   "sessions",
@@ -361,6 +508,11 @@ export const questions = pgTable(
       .notNull()
       .references(() => skillAreas.id, { onDelete: "restrict" }),
     type: questionTypeEnum("type").notNull(),
+    /**
+     * Diagnostic items are never shown with their answer; practice items
+     * always are. A question belongs to exactly one pool, permanently.
+     */
+    pool: questionPoolEnum("pool").notNull().default("diagnostic"),
     prompt: text("prompt").notNull(),
     /** 1 = easy, 2 = medium, 3 = hard. Used to spread difficulty per attempt. */
     difficulty: integer("difficulty").notNull().default(2),
