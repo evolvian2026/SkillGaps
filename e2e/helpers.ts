@@ -82,7 +82,12 @@ export async function completeDiagnostic(
       const box = page.locator("textarea, input[placeholder='Type your answer']");
       if (await box.count()) await box.first().fill("O(n)");
     }
-    await expect(page.getByText("Answers saved automatically")).toBeVisible();
+    // Key off the indicator's state, not its wording: the answer is committed
+    // only once the outbox has drained, and the copy is free to change.
+    await expect(page.getByTestId("save-status")).toHaveAttribute(
+      "data-state",
+      "saved",
+    );
   }
 
   await jump.nth(total - 1).click();

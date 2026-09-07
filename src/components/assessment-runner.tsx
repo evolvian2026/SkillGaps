@@ -4,14 +4,17 @@ import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import type { PaperQuestion } from "@/lib/assessment/paper";
 import {
   recordIntegrityEventAction,
-  saveAnswerAction,
   submitAttemptAction,
 } from "@/lib/assessment/actions";
+import type { Draft } from "@/lib/assessment/outbox";
+import { useAnswerOutbox } from "./use-answer-outbox";
+import { SaveIndicator } from "./save-indicator";
 import { track } from "./analytics";
 import { Countdown } from "./countdown";
 import { Alert, Button } from "./ui";
 
-type Draft = { optionId: string | null; text: string | null };
+/** Long enough to coalesce a burst of typing, short enough to feel immediate. */
+const TYPING_DEBOUNCE_MS = 700;
 
 export function AssessmentRunner({
   attemptId,
@@ -33,42 +36,92 @@ export function AssessmentRunner({
       ]),
     ),
   );
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "error">("idle");
   const [notice, setNotice] = useState<string | null>(null);
   const [submitting, startSubmit] = useTransition();
+  const [blockedSubmit, setBlockedSubmit] = useState<number | null>(null);
 
+  const outbox = useAnswerOutbox(attemptId);
   const question = questions[index];
   const shownAt = useRef(Date.now());
   const submitted = useRef(false);
+  /** Pending debounce timer for free-text answers, so typing is not one request per keystroke. */
+  const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     shownAt.current = Date.now();
   }, [index]);
 
-  const persist = useCallback(
-    async (attemptQuestionId: string, draft: Draft, languageId: number | null) => {
-      setSaveState("saving");
-      const result = await saveAnswerAction(attemptId, {
+  // Anything recovered from local storage is already re-queued by the hook;
+  // this puts it back on screen so the student sees their own words, not a
+  // blank box they would retype.
+  useEffect(() => {
+    if (outbox.restored.length === 0) return;
+    setDrafts((prev) => {
+      const next = { ...prev };
+      for (const item of outbox.restored) {
+        next[item.attemptQuestionId] = item.draft;
+      }
+      return next;
+    });
+    setNotice(
+      `Restored ${outbox.restored.length} unsaved ${
+        outbox.restored.length === 1 ? "answer" : "answers"
+      } from this device. They are being saved now.`,
+    );
+  }, [outbox.restored]);
+
+  const send = useCallback(
+    (attemptQuestionId: string, draft: Draft, languageId: number | null) => {
+      outbox.queue({
         attemptQuestionId,
-        optionId: draft.optionId,
-        responseText: draft.text,
+        draft,
         languageId,
         timeSpentMs: Date.now() - shownAt.current,
       });
-      setSaveState(result.ok ? "idle" : "error");
-      if (!result.ok && result.error) setNotice(result.error);
     },
-    [attemptId],
+    [outbox],
   );
 
-  const submit = useCallback(() => {
-    if (submitted.current) return;
-    submitted.current = true;
-    void track("assessment_submitted", { attempt_id: attemptId });
-    startSubmit(() => {
-      void submitAttemptAction(attemptId);
-    });
-  }, [attemptId]);
+  /**
+   * Submits, but never with answers still unsent.
+   *
+   * `force` is for the timer running out: the deadline is server-authoritative
+   * so the attempt closes regardless, and the best we can do is one last flush
+   * before it does.
+   */
+  const submit = useCallback(
+    (force = false) => {
+      if (submitted.current) return;
+
+      // Any keystroke still inside the debounce window has not reached the
+      // queue yet. Flush it first, or the last thing the student typed is the
+      // one thing that never gets saved.
+      if (typingTimer.current) {
+        clearTimeout(typingTimer.current);
+        typingTimer.current = null;
+        const pending = drafts[question.attemptQuestionId];
+        if (pending) send(question.attemptQuestionId, pending, question.languageId);
+      }
+
+      void (async () => {
+        const unsent = await outbox.flush();
+        if (unsent > 0 && !force) {
+          setBlockedSubmit(unsent);
+          return;
+        }
+        setBlockedSubmit(null);
+        submitted.current = true;
+        outbox.finish();
+        void track("assessment_submitted", { attempt_id: attemptId });
+        startSubmit(() => {
+          void submitAttemptAction(attemptId);
+        });
+      })();
+    },
+    [attemptId, drafts, outbox, question, send],
+  );
+
+  const onExpire = useCallback(() => submit(true), [submit]);
 
   // Integrity signals. Recorded for review only — nothing here blocks or ends
   // an attempt, because a dropped hostel connection looks identical to this.
@@ -108,9 +161,29 @@ export function AssessmentRunner({
     return d?.optionId || (d?.text && d.text.trim().length > 0);
   }).length;
 
-  const update = (next: Draft) => {
+  /** A choice is a deliberate act: save it at once. */
+  const choose = (next: Draft) => {
     setDrafts((prev) => ({ ...prev, [question.attemptQuestionId]: next }));
-    void persist(question.attemptQuestionId, next, question.languageId);
+    send(question.attemptQuestionId, next, question.languageId);
+  };
+
+  /**
+   * Typing is debounced.
+   *
+   * One request per keystroke floods a weak link and, worse, puts several
+   * saves for the same question in flight at once. The outbox would coalesce
+   * them, but not sending them is cheaper — and the local buffer is written
+   * synchronously either way, so a crash mid-sentence still loses nothing.
+   */
+  const type = (next: Draft) => {
+    setDrafts((prev) => ({ ...prev, [question.attemptQuestionId]: next }));
+    const attemptQuestionId = question.attemptQuestionId;
+    const languageId = question.languageId;
+    if (typingTimer.current) clearTimeout(typingTimer.current);
+    typingTimer.current = setTimeout(() => {
+      typingTimer.current = null;
+      send(attemptQuestionId, next, languageId);
+    }, TYPING_DEBOUNCE_MS);
   };
 
   return (
@@ -123,7 +196,7 @@ export function AssessmentRunner({
             answered
           </p>
         </div>
-        <Countdown expiresAtIso={expiresAtIso} onExpire={submit} />
+        <Countdown expiresAtIso={expiresAtIso} onExpire={onExpire} />
       </header>
 
       <div
@@ -142,6 +215,29 @@ export function AssessmentRunner({
       {notice ? (
         <div className="mb-4">
           <Alert tone="info">{notice}</Alert>
+        </div>
+      ) : null}
+
+      {blockedSubmit !== null ? (
+        <div className="mb-4" data-testid="submit-blocked">
+          <Alert>
+            {blockedSubmit} {blockedSubmit === 1 ? "answer has" : "answers have"}{" "}
+            not reached us yet, so submitting now would lose{" "}
+            {blockedSubmit === 1 ? "it" : "them"}. Your work is safe on this
+            device — wait for the connection to come back and press submit
+            again. Do not close this tab.
+          </Alert>
+        </div>
+      ) : null}
+
+      {outbox.status.kind === "fatal" && outbox.pending > 0 ? (
+        <div className="mb-4">
+          <Alert>
+            {outbox.status.error} {outbox.pending}{" "}
+            {outbox.pending === 1 ? "answer" : "answers"} could not be saved.
+            Tell your placement office before you leave — they can see this
+            attempt and what reached us.
+          </Alert>
         </div>
       ) : null}
 
@@ -170,7 +266,7 @@ export function AssessmentRunner({
                   type="radio"
                   name={question.attemptQuestionId}
                   checked={draft?.optionId === option.id}
-                  onChange={() => update({ optionId: option.id, text: null })}
+                  onChange={() => choose({ optionId: option.id, text: null })}
                   className="mt-0.5 h-4 w-4 text-brand-600"
                 />
                 <span className="whitespace-pre-wrap">{option.label}</span>
@@ -182,7 +278,7 @@ export function AssessmentRunner({
         {question.type === "short" ? (
           <input
             value={draft?.text ?? ""}
-            onChange={(e) => update({ optionId: null, text: e.target.value })}
+            onChange={(e) => type({ optionId: null, text: e.target.value })}
             placeholder="Type your answer"
             className="w-full rounded-lg border border-ink-200 px-3 py-2.5 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
           />
@@ -192,7 +288,7 @@ export function AssessmentRunner({
           <div>
             <textarea
               value={draft?.text ?? ""}
-              onChange={(e) => update({ optionId: null, text: e.target.value })}
+              onChange={(e) => type({ optionId: null, text: e.target.value })}
               onPaste={(e) => blockClipboard(e, "paste_blocked")}
               onCopy={(e) => blockClipboard(e, "copy_blocked")}
               onCut={(e) => blockClipboard(e, "copy_blocked")}
@@ -216,15 +312,9 @@ export function AssessmentRunner({
         >
           Previous
         </Button>
-        <span className="text-xs text-ink-600">
-          {saveState === "saving"
-            ? "Saving…"
-            : saveState === "error"
-              ? "Not saved — check your connection"
-              : "Answers saved automatically"}
-        </span>
+        <SaveIndicator status={outbox.status} />
         {index === questions.length - 1 ? (
-          <Button onClick={submit} disabled={submitting}>
+          <Button onClick={() => submit()} disabled={submitting}>
             {submitting ? "Submitting…" : "Submit assessment"}
           </Button>
         ) : (

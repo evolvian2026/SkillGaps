@@ -136,6 +136,9 @@ test.describe("Roster onboarding", () => {
     await expect(tpo.getByTestId("roster-count-invite")).toHaveText("0");
     await expect(tpo.getByTestId("roster-count-update")).toHaveText("2");
     await tpo.click('button:has-text("Import 2 students")');
+    // Wait for the import to report, not just for the click to land: leaving
+    // the page while the write is in flight raced the assertion below.
+    await expect(tpo.getByText(/2 updated/i)).toBeVisible();
 
     await tpo.goto("/admin/roster");
     // Still two rows, not four.

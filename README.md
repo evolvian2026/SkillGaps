@@ -302,7 +302,7 @@ tabs, and treating that as cheating would be both wrong and unfair.
 |---|---|---|
 | Unit + RLS | `npm test` | Scoring, matching, curriculum comparison, evaluation, calibration guards, and tenant isolation on every table, against a real database |
 | Python | `cd services/parser && pytest` | Text extraction, skill matching, and the calibration and item-analysis statistics including every refusal path |
-| End-to-end | `npm run test:e2e` | The whole product in a browser: six journeys plus security probes. See `e2e/README.md` |
+| End-to-end | `npm run test:e2e` | The whole product in a browser: seven journeys plus security probes. See `e2e/README.md` |
 | Everything | `npm run test:all` | Unit then end-to-end |
 
 The end-to-end suite needs the full system running — database, Redis, worker,
@@ -600,12 +600,59 @@ data. Publishing a revision means inserting a new version and flipping
 
 ---
 
+## Assessment resilience
+
+The worst failure this product can have is a student losing answers they
+already typed. Autosave used to be one fire-and-forget call per keystroke: on
+failure it showed *"Not saved — check your connection"* and the answer was
+gone. Losing a paper does not merely lose a score — it ends an institution's
+trust in the platform.
+
+The runner now writes through an **answer outbox**
+(`src/lib/assessment/outbox.ts`), modelled as pure data so its rules can be
+tested without a browser, a network or a database.
+
+| Guarantee | How |
+|---|---|
+| An answer survives a dropped connection | Queued and retried with exponential backoff, capped at 30s |
+| An answer survives a closed tab or a restarted machine | Mirrored to `localStorage` **before** any network call, and re-queued on load |
+| A newer answer is never overwritten by an older one | One pending draft per question; a settle only applies if its sequence number still matches |
+| A paper is never submitted with answers still unsent | Submit flushes first and refuses if anything remains, saying how much |
+| A whole lab does not stampede a recovering uplink | Full jitter on every backoff interval |
+| Typing does not flood a weak link | Free text is debounced ~700ms; choosing an MCQ option saves immediately |
+
+Details worth knowing:
+
+- **Terminal failures are not retried.** *"Time is up"* and *"already
+  submitted"* are the server saying no; retrying those would hide the real
+  state. Anything unrecognised is treated as transient — the safe direction,
+  since a wasted request costs nothing and a discarded answer costs a paper.
+- **The status line never claims "saved" while work is outstanding.** It
+  distinguishes offline (naming the cause the student can act on) from a patchy
+  connection being retried, and says how many answers are waiting.
+- **Timer expiry still submits.** The deadline is server-authoritative, so the
+  attempt closes regardless; the runner makes one last flush attempt first and
+  the student is told if anything did not make it.
+- **The local buffer is per attempt**, and other attempts' buffers are cleared
+  on load — a shared lab machine must not carry one student's drafts into the
+  next student's paper.
+- **Every storage access is wrapped.** `localStorage` throws outright in some
+  privacy modes and on quota; an assessment that crashed because it could not
+  write a *backup* would be worse than one with no backup.
+
+`tests/outbox.test.ts` covers the queue rules including the out-of-order race;
+`e2e/07-assessment-resilience.spec.ts` cuts the network in a real browser and
+drives the whole recovery.
+
 ## Low-bandwidth choices
 
 Target is a student on shared campus or hostel internet.
 
 - ~103 kB of shared JS. Every page except the assessment runner is a Server
-  Component; the runner is the only meaningfully interactive surface.
+  Component; the runner is the only meaningfully interactive surface. It is
+  also the heaviest page at ~112 kB first load — the outbox and local buffer
+  cost about 2 kB gzipped, which is the one place in this codebase where bytes
+  were deliberately spent to protect a student's work rather than saved.
 - Recharts is loaded through `next/dynamic` (`components/lazy-charts.tsx`), so
   the chart bundle never blocks first paint. The cohort heatmap is plain CSS
   grid with no client JS at all.
@@ -661,6 +708,10 @@ environment.
 - Data export and deletion are a request-to-admin flow, not automated erasure.
   An irreversible cascade across attempts and scores should not be automated
   before there is an audited process behind it.
+- The answer outbox retries indefinitely while the tab is open, but it is not
+  a background sync: an attempt whose tab is closed with work still unsent will
+  recover it only when that same browser reopens the attempt. A service worker
+  would close that gap.
 - Judge0 still runs synchronously inside the diagnostic submit request. Fine
   for the short programs a diagnostic asks for; it should move to the job queue
   before volume grows.
